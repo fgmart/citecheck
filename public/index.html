@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Citecheck</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; }
+      .card { border: 1px solid #ddd; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+      .confidence-high { color: #0a7f2e; font-weight: bold; }
+      .confidence-medium { color: #b07d00; font-weight: bold; }
+      .confidence-low { color: #b00020; font-weight: bold; }
+      .citation-text { white-space: pre-wrap; background: #f7f7f7; padding: 0.75rem; border-radius: 6px; margin-top: 0.5rem; }
+      button { padding: 0.6rem 1rem; cursor: pointer; }
+      pre { white-space: pre-wrap; background: #f7f7f7; padding: 1rem; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Citecheck</h1>
+    <p>Upload a paper PDF to extract and review its references.</p>
+    <p><strong>Engine:</strong> <span id="engine-version">loading…</span></p>
+    <form id="upload-form">
+      <input type="file" name="pdf" accept="application/pdf" required />
+      <button type="submit">Analyze PDF</button>
+    </form>
+    <div id="result"></div>
+
+    <script>
+      const form = document.getElementById('upload-form');
+      const result = document.getElementById('result');
+      const engineVersion = document.getElementById('engine-version');
+
+      async function loadEngineVersion() {
+        try {
+          const response = await fetch('/api/health');
+          const data = await response.json();
+          engineVersion.textContent = data.engineVersion || 'unknown';
+        } catch (err) {
+          engineVersion.textContent = 'unavailable';
+        }
+      }
+
+      loadEngineVersion();
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        result.innerHTML = '<p>Analyzing...</p>';
+
+        try {
+          const response = await fetch('/api/analyze', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Analysis failed');
+
+          result.innerHTML = `
+            <div class="card">
+              <h2>Results for ${data.filename}</h2>
+              <p><strong>References found:</strong> ${data.referencesFound}</p>
+              <p><strong>Engine version:</strong> ${data.engineVersion || 'unknown'}</p>
+            </div>
+            ${data.references.map((ref, index) => `
+              <div class="card">
+                <h3>${index + 1}</h3>
+                <div class="citation-text">${ref.reference}</div>
+                <p><strong>Type:</strong> ${ref.type}</p>
+                <p><strong>DOI:</strong> ${ref.doi || 'None'}</p>
+                <p class="confidence-${ref.confidence}"><strong>Confidence:</strong> ${ref.confidence.toUpperCase()}</p>
+                <p><strong>Summary:</strong> ${ref.summary}</p>
+                <p><strong>Recommendations:</strong> ${ref.recommendations.join(' ')}</p>
+              </div>
+            `).join('')}
+          `;
+        } catch (err) {
+          result.innerHTML = `<p style="color:red">${err.message}</p>`;
+        }
+      });
+    </script>
+  </body>
+</html>
