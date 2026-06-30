@@ -5,8 +5,13 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.1.0';
+const ENGINE_VERSION = 'citecheck-v2.1.5';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
+const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
+const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
+const CROSSREF_RETRIES = Number(process.env.CROSSREF_RETRIES || 4);
+const CROSSREF_MIN_INTERVAL_MS = Number(process.env.CROSSREF_MIN_INTERVAL_MS || 1500);
+let nextCrossrefRequestAt = 0;
 fs.mkdirSync(uploadsDir, { recursive: true });
 
 function debugLog(message, detail) {
@@ -20,6 +25,10 @@ function debugLog(message, detail) {
 
 function normalizeText(text) {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function cleanExtractedText(text) {
@@ -183,20 +192,240 @@ function inferReferenceType(reference) {
   return 'unknown';
 }
 
+function normalizeDoi(doi) {
+  return doi ? doi.replace(/[.,;:]+$/g, '').toLowerCase() : null;
+}
+
 function extractDoi(reference) {
   const match = reference.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
-  return match ? match[0] : null;
+  return match ? normalizeDoi(match[0]) : null;
 }
 
 function extractTitleCandidate(reference) {
-  const withoutNumbers = reference.replace(/^(\[\d+\]|\d+[.)]\s*)/, '');
-  return withoutNumbers.split(/\s(?=(?:[A-Z][a-z]+|[A-Z]{2,})\s)/)[0] || withoutNumbers.slice(0, 120);
+  const withoutNumbers = reference.replace(/^(\[\d+\]|\d+[.)]\s*)/, '').trim();
+  const withoutDoi = withoutNumbers.replace(/10\.\d{4,9}\/[\-._;()/:A-Z0-9]+/gi, '').trim();
+  const withoutUrl = withoutDoi.replace(/https?:\/\/\S+/gi, '').trim();
+  const segments = withoutUrl
+    .split(/\.\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const titleCandidate = segments.find((segment) => {
+    const words = segment.split(/\s+/).filter(Boolean);
+    return words.length >= 3 && !/[,:;]/.test(segment) && !/(journal|proc|transactions|conference|press|springer|ieee|acm|arxiv|doi|https?)/i.test(segment);
+  });
+
+  return titleCandidate || withoutUrl.slice(0, 160);
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Remote request failed with status ${response.status}`);
-  return response.json();
+function extractYear(reference) {
+  const match = reference.match(/\b(19|20)\d{2}\b/);
+  return match ? Number(match[0]) : null;
+}
+
+function tokenize(text) {
+  return normalizeText(text)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function tokenOverlapScore(leftText, rightText) {
+  const left = Array.from(new Set(tokenize(leftText)));
+  const right = Array.from(new Set(tokenize(rightText)));
+  if (!left.length || !right.length) return 0;
+
+  const rightSet = new Set(right);
+  const overlap = left.filter((token) => rightSet.has(token));
+  return overlap.length / Math.max(1, Math.min(left.length, right.length));
+}
+
+function formatScoreLabel(score) {
+  if (score >= 0.8) return 'strong';
+  if (score >= 0.45) return 'medium';
+  if (score > 0) return 'weak';
+  return 'none';
+}
+
+function scoreCandidateMatch(reference, candidate = {}) {
+  const referenceTitle = extractTitleCandidate(reference);
+  const titleScore = candidate.title ? Math.max(tokenOverlapScore(referenceTitle, candidate.title), tokenOverlapScore(reference, candidate.title)) : 0;
+  const venueScore = candidate.containerTitle ? tokenOverlapScore(reference, candidate.containerTitle) : 0;
+  const authorScore = candidate.authors ? tokenOverlapScore(reference, candidate.authors) : 0;
+  const referenceYear = extractYear(reference);
+  const yearMatched = Boolean(candidate.year && referenceYear && candidate.year === referenceYear);
+  const yearMismatched = Boolean(candidate.year && referenceYear && candidate.year !== referenceYear);
+  const yearDistance = yearMismatched ? Math.abs(candidate.year - referenceYear) : 0;
+  const severeYearMismatch = yearDistance > 1;
+  const yearScore = yearMatched ? 1 : 0;
+  const doiMatched = Boolean(candidate.doi && extractDoi(reference) && normalizeDoi(candidate.doi) === extractDoi(reference));
+  const doiBonus = doiMatched ? 0.2 : 0;
+  const yearPenalty = severeYearMismatch ? 0.35 : yearMismatched ? 0.15 : 0;
+  const weakTitlePenalty = titleScore < 0.25 ? 0.15 : 0;
+  const score = Math.max(0, Math.min(1, titleScore * 0.5 + authorScore * 0.2 + yearScore * 0.15 + venueScore * 0.1 + doiBonus - yearPenalty - weakTitlePenalty));
+
+  let confidence = 'low';
+  if (score >= 0.75 && titleScore >= 0.45) confidence = 'high';
+  else if (score >= 0.4 && titleScore >= 0.25) confidence = 'medium';
+  if (severeYearMismatch && !doiMatched) confidence = 'low';
+
+  const evidence = [
+    `Title overlap: ${formatScoreLabel(titleScore)}`,
+    `Author overlap: ${formatScoreLabel(authorScore)}`,
+    `Venue overlap: ${formatScoreLabel(venueScore)}`
+  ];
+
+  if (referenceYear && candidate.year) {
+    evidence.push(yearMatched ? `Year matched: ${candidate.year}` : `Year mismatch: cited ${referenceYear}, candidate ${candidate.year}`);
+  } else if (referenceYear) {
+    evidence.push(`Cited year: ${referenceYear}; candidate year unavailable`);
+  } else if (candidate.year) {
+    evidence.push(`Candidate year: ${candidate.year}`);
+  }
+
+  if (doiMatched) evidence.push('DOI exactly matched');
+
+  return {
+    score,
+    confidence,
+    evidence,
+    details: {
+      titleScore,
+      authorScore,
+      venueScore,
+      yearMatched,
+      yearMismatched,
+      severeYearMismatch,
+      doiMatched
+    }
+  };
+}
+
+function getCrossrefYear(work = {}) {
+  const dateSource = work.issued || work['published-print'] || work['published-online'] || work.created;
+  const dateParts = dateSource && dateSource['date-parts'];
+  return Array.isArray(dateParts) && Array.isArray(dateParts[0]) ? dateParts[0][0] : null;
+}
+
+function normalizeCrossrefWork(work = {}) {
+  const authors = Array.isArray(work.author)
+    ? work.author.map((author) => author.family || author.name || [author.given, author.family].filter(Boolean).join(' ')).filter(Boolean).slice(0, 8).join(', ')
+    : '';
+
+  return {
+    source: 'crossref',
+    doi: normalizeDoi(work.DOI || work.doi || ''),
+    title: Array.isArray(work.title) ? work.title[0] : work.title || '',
+    authors,
+    containerTitle: Array.isArray(work['container-title']) ? work['container-title'][0] : work['container-title'] || '',
+    year: getCrossrefYear(work),
+    volume: work.volume || '',
+    issue: work.issue || '',
+    pages: work.page || '',
+    publisher: work.publisher || '',
+    url: work.URL || '',
+    crossrefScore: typeof work.score === 'number' ? work.score : null
+  };
+}
+
+function buildCrossrefUrl(pathname, params = {}) {
+  const url = new URL(`https://api.crossref.org${pathname}`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+  });
+  if (CROSSREF_MAILTO) url.searchParams.set('mailto', CROSSREF_MAILTO);
+  return url.toString();
+}
+
+function isRetriableStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function getRetryDelay(attempt, response) {
+  const retryAfter = response && response.headers ? response.headers.get('retry-after') : null;
+  const retryAfterSeconds = retryAfter && Number(retryAfter);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return retryAfterSeconds * 1000;
+  }
+  if (response && response.status === 429) {
+    return 10000 * 2 ** attempt;
+  }
+  return 400 * 2 ** attempt;
+}
+
+async function waitForCrossrefSlot(now = Date.now()) {
+  const scheduledAt = Math.max(now, nextCrossrefRequestAt);
+  nextCrossrefRequestAt = scheduledAt + CROSSREF_MIN_INTERVAL_MS;
+  const delay = scheduledAt - now;
+  if (delay > 0) await sleep(delay);
+}
+
+async function fetchJson(url, options = {}) {
+  const retries = options.retries ?? CROSSREF_RETRIES;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let response = null;
+
+    try {
+      await waitForCrossrefSlot();
+      response = await fetch(url, {
+        headers: {
+          'User-Agent': `Citecheck/2.1.4${CROSSREF_MAILTO ? ` (mailto:${CROSSREF_MAILTO})` : ''}`
+        }
+      });
+
+      if (response.ok) return response.json();
+
+      lastError = new Error(`Remote request failed with status ${response.status}`);
+      if (!isRetriableStatus(response.status) || attempt === retries) break;
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) break;
+    }
+
+    await sleep(getRetryDelay(attempt, response));
+  }
+
+  throw lastError || new Error('Remote request failed');
+}
+
+async function fetchCrossrefWorkByDoi(doi) {
+  const data = await fetchJson(buildCrossrefUrl(`/works/${encodeURIComponent(doi)}`));
+  return normalizeCrossrefWork(data.message || {});
+}
+
+async function searchCrossrefCandidates(reference, rows = 8) {
+  const data = await fetchJson(buildCrossrefUrl('/works', {
+    rows,
+    'query.bibliographic': normalizeText(reference)
+  }));
+  const items = data.message && Array.isArray(data.message.items) ? data.message.items : [];
+  return items.map(normalizeCrossrefWork).filter((candidate) => candidate.title || candidate.doi);
+}
+
+function rankCandidates(reference, candidates = []) {
+  return candidates
+    .map((candidate) => {
+      const match = scoreCandidateMatch(reference, candidate);
+      return { ...candidate, match };
+    })
+    .sort((left, right) => right.match.score - left.match.score);
+}
+
+function describeCandidate(candidate) {
+  if (!candidate) return 'unknown candidate';
+  const parts = [
+    candidate.title || 'untitled work',
+    candidate.year ? `(${candidate.year})` : '',
+    candidate.doi ? `DOI ${candidate.doi}` : ''
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+function describeLookupError(error) {
+  return error && error.message ? error.message : 'unknown error';
 }
 
 async function analyzeReference(reference) {
@@ -210,44 +439,60 @@ async function analyzeReference(reference) {
 
   if (doi) {
     try {
-      const data = await fetchJson(`https://api.crossref.org/works/${encodeURIComponent(doi)}`);
-      const message = data.message || {};
-      const title = Array.isArray(message.title) ? message.title[0] : message.title;
-      const authors = Array.isArray(message.author) ? message.author.map((a) => a.family || a.name).slice(0, 3).join(', ') : '';
-      const journal = message['container-title'] ? message['container-title'][0] : '';
-      doiFound = doi;
-
-      const titleMatch = title ? normalizeText(title).toLowerCase().includes(normalizeText(reference).toLowerCase().slice(0, 80)) : false;
-      const journalMatch = journal ? normalizeText(journal).toLowerCase().includes(normalizeText(reference).toLowerCase().slice(0, 80)) : false;
-
-      confidence = titleMatch || journalMatch ? 'high' : 'medium';
-      summary = `DOI resolved and metadata was retrieved for ${doi}.`;
-      evidence.push(`Title: ${title || 'not available'}`);
-      if (authors) evidence.push(`Authors: ${authors}`);
-      if (journal) evidence.push(`Journal: ${journal}`);
+      const candidate = await fetchCrossrefWorkByDoi(doi);
+      const match = scoreCandidateMatch(reference, candidate);
+      confidence = match.confidence;
+      doiFound = candidate.doi || doi;
+      summary = `DOI resolved in Crossref: ${describeCandidate(candidate)}.`;
+      evidence = [
+        `Crossref title: ${candidate.title || 'not available'}`,
+        ...match.evidence
+      ];
+      if (candidate.authors) evidence.push(`Crossref authors: ${candidate.authors}`);
+      if (candidate.containerTitle) evidence.push(`Crossref venue: ${candidate.containerTitle}`);
       recommendations = ['Confirm that the author list, title, and venue exactly match the source metadata.'];
+      if (confidence === 'low') {
+        recommendations.push('The metadata overlap was weak, so this reference should be reviewed manually.');
+      }
     } catch (error) {
       confidence = 'medium';
-      summary = `DOI ${doi} was detected, but the remote lookup did not return metadata.`;
+      summary = `DOI ${doi} was detected, but the Crossref lookup failed: ${describeLookupError(error)}.`;
+      evidence = [`Lookup error: ${describeLookupError(error)}`];
       recommendations = ['Check the DOI manually and confirm the citation fields against the authoritative record.'];
     }
   } else {
     try {
-      const titleQuery = encodeURIComponent(extractTitleCandidate(reference));
-      const searchData = await fetchJson(`https://api.crossref.org/works?rows=3&query.title=${titleQuery}`);
-      const items = searchData.message && Array.isArray(searchData.message.items) ? searchData.message.items : [];
-      if (items.length) {
-        const first = items[0];
-        const foundTitle = first.title ? first.title[0] : '';
-        const foundDoi = first.DOI || null;
-        doiFound = foundDoi;
-        confidence = 'medium';
-        summary = `No DOI was present in the citation, but a best-effort Crossref search found a likely match: ${foundTitle || 'unknown title'}.`;
+      const ranked = rankCandidates(reference, await searchCrossrefCandidates(reference));
+      const best = ranked[0];
+      const second = ranked[1];
+
+      if (best) {
+        confidence = best.match.confidence;
+        doiFound = best.doi;
+        summary = `No DOI was present in the citation. Best Crossref candidate: ${describeCandidate(best)}.`;
         recommendations = ['Add an explicit DOI or stable URL if available and verify the reference metadata.'];
-        evidence.push(`Candidate DOI: ${foundDoi || 'not available'}`);
+        evidence = [
+          `Crossref candidates reviewed: ${ranked.length}`,
+          `Best score: ${best.match.score.toFixed(2)}`,
+          ...best.match.evidence
+        ];
+        if (best.authors) evidence.push(`Candidate authors: ${best.authors}`);
+        if (best.containerTitle) evidence.push(`Candidate venue: ${best.containerTitle}`);
+        if (second) {
+          const gap = best.match.score - second.match.score;
+          evidence.push(`Next candidate score: ${second.match.score.toFixed(2)} (${describeCandidate(second)})`);
+          if (gap < 0.12) {
+            confidence = confidence === 'high' ? 'medium' : confidence;
+            recommendations.push('The top Crossref candidates are close together, so this match should be reviewed manually.');
+          }
+        }
+        if (confidence === 'low') {
+          recommendations.push('The title/author/venue/year overlap was weak, so this reference should be reviewed manually.');
+        }
       }
     } catch (error) {
-      summary = 'No DOI was detected and no strong remote match was found.';
+      summary = `No DOI was detected and Crossref candidate search failed: ${describeLookupError(error)}.`;
+      evidence = [`Lookup error: ${describeLookupError(error)}`];
       recommendations = ['Add a DOI or a stable URL and verify title, author, and venue details manually.'];
     }
   }
@@ -262,6 +507,23 @@ async function analyzeReference(reference) {
     evidence,
     status: 'checked'
   };
+}
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
 }
 
 function parseMultipartBody(body, boundary) {
@@ -315,6 +577,34 @@ function extractPdfText(pdfPath) {
   };
 }
 
+function buildAnalyzeResponse({ filename, extracted, references, engineVersion, debugRequested, debugOutput }) {
+  const response = {
+    filename,
+    totalCharacters: extracted.processed.length,
+    referencesFound: references.length,
+    references,
+    engineVersion
+  };
+
+  if (debugRequested) {
+    response.debugOutput = debugOutput.join('\n');
+    response.rawExtractedText = extracted.raw;
+    response.cleanedExtractedText = extracted.cleaned;
+    response.processedExtractedText = extracted.processed;
+  } else {
+    response.debugOutput = null;
+    response.rawExtractedText = null;
+    response.cleanedExtractedText = null;
+    response.processedExtractedText = null;
+  }
+
+  return response;
+}
+
+function writeAnalyzeEvent(res, event, data = {}) {
+  res.write(`${JSON.stringify({ event, ...data })}\n`);
+}
+
 async function handleAnalyze(req, res) {
   try {
     const body = await readRequestBody(req);
@@ -345,26 +635,50 @@ async function handleAnalyze(req, res) {
     const extracted = extractPdfText(tempPath);
     const debugOutput = [];
     const references = extractReferencesFromText(extracted.processed, debugRequested ? debugOutput : null);
-    const analyzed = await Promise.all(references.map(analyzeReference));
+    const analyzed = new Array(references.length);
+
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache'
+    });
+    writeAnalyzeEvent(res, 'references-found', { total: references.length });
+
+    for (let index = 0; index < references.length; index += 1) {
+      writeAnalyzeEvent(res, 'checking-reference', {
+        index: index + 1,
+        total: references.length
+      });
+      analyzed[index] = await analyzeReference(references[index]);
+      writeAnalyzeEvent(res, 'checked-reference', {
+        index: index + 1,
+        total: references.length,
+        confidence: analyzed[index].confidence,
+        doi: analyzed[index].doi
+      });
+    }
 
     fs.unlinkSync(tempPath);
 
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    writeAnalyzeEvent(res, 'complete', {
+      result: buildAnalyzeResponse({
       filename: fileName,
-      totalCharacters: extracted.processed.length,
-      referencesFound: analyzed.length,
+      extracted,
       references: analyzed,
       engineVersion: ENGINE_VERSION,
-      debugOutput: debugRequested ? debugOutput.join('\n') : null,
-      rawExtractedText: extracted.raw,
-      cleanedExtractedText: extracted.cleaned,
-      processedExtractedText: extracted.processed
-    }));
+      debugRequested,
+      debugOutput
+      })
+    });
+    res.end();
   } catch (error) {
     console.error(error);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: error.message }));
+    if (res.headersSent) {
+      writeAnalyzeEvent(res, 'error', { error: error.message });
+      res.end();
+    } else {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
   }
 }
 
@@ -414,5 +728,15 @@ module.exports = {
   analyzeReference,
   cleanExtractedText,
   reorderTextForColumns,
-  stripPageHeaders
+  stripPageHeaders,
+  buildAnalyzeResponse,
+  scoreCandidateMatch,
+  rankCandidates,
+  normalizeCrossrefWork,
+  normalizeDoi,
+  mapWithConcurrency,
+  describeLookupError,
+  waitForCrossrefSlot,
+  extractTitleCandidate,
+  extractYear
 };
