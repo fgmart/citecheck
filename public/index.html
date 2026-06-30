@@ -38,6 +38,83 @@
       const debugToggle = document.getElementById('debug-toggle');
       const debugOutput = document.getElementById('debug-output');
 
+      function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, (char) => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        }[char]));
+      }
+
+      function renderEvidence(evidence) {
+        if (!Array.isArray(evidence) || evidence.length === 0) return '<p><strong>Evidence:</strong> None</p>';
+        return `
+          <p><strong>Evidence:</strong></p>
+          <ul>
+            ${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+          </ul>
+        `;
+      }
+
+      function renderProgress(message, detail = '') {
+        result.innerHTML = `
+          <div class="card">
+            <h2>Analyzing PDF</h2>
+            <p><strong>Status:</strong> ${escapeHtml(message)}</p>
+            ${detail ? `<p>${escapeHtml(detail)}</p>` : ''}
+          </div>
+        `;
+      }
+
+      async function readAnalyzeResponse(response, onProgress) {
+        const contentType = response.headers.get('content-type') || '';
+
+        if (contentType.includes('application/json')) {
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Analysis failed');
+          return data;
+        }
+
+        if (!response.ok) throw new Error('Analysis failed');
+        if (!response.body) throw new Error('Streaming response is not available in this browser.');
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finalResult = null;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const message = JSON.parse(line);
+
+            if (message.event === 'references-found') {
+              onProgress('References extracted', `${message.total} references found.`);
+            } else if (message.event === 'checking-reference') {
+              onProgress(`Checking reference ${message.index} of ${message.total}`);
+            } else if (message.event === 'checked-reference') {
+              onProgress(`Checked reference ${message.index} of ${message.total}`, `Confidence: ${message.confidence || 'unknown'}${message.doi ? `; DOI: ${message.doi}` : ''}`);
+            } else if (message.event === 'complete') {
+              finalResult = message.result;
+            } else if (message.event === 'error') {
+              throw new Error(message.error || 'Analysis failed');
+            }
+          }
+
+          if (done) break;
+        }
+
+        if (!finalResult) throw new Error('Analysis ended before returning results.');
+        return finalResult;
+      }
+
       async function loadEngineVersion() {
         try {
           const response = await fetch('/api/health');
@@ -53,10 +130,11 @@
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(form);
-        result.innerHTML = '<p>Analyzing...</p>';
+        renderProgress('Uploading PDF');
 
         try {
-          if (debugToggle.checked) {
+          const showDebugDetails = debugToggle.checked;
+          if (showDebugDetails) {
             formData.set('debug', 'true');
             debugOutput.style.display = 'block';
             debugOutput.innerHTML = '<p>Waiting for parser trace...</p>';
@@ -70,37 +148,39 @@
             method: 'POST',
             body: formData
           });
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error || 'Analysis failed');
+          const data = await readAnalyzeResponse(response, renderProgress);
 
-          if (data.debugOutput) {
-            debugOutput.innerHTML = `<pre>${data.debugOutput}</pre>`;
+          if (showDebugDetails && data.debugOutput) {
+            debugOutput.innerHTML = `<pre>${escapeHtml(data.debugOutput)}</pre>`;
           }
 
           result.innerHTML = `
             <div class="card">
-              <h2>Results for ${data.filename}</h2>
+              <h2>Results for ${escapeHtml(data.filename)}</h2>
               <p><strong>References found:</strong> ${data.referencesFound}</p>
-              <p><strong>Engine version:</strong> ${data.engineVersion || 'unknown'}</p>
+              <p><strong>Engine version:</strong> ${escapeHtml(data.engineVersion || 'unknown')}</p>
             </div>
-            <div class="card">
-              <h3>Extracted text</h3>
-              <p><strong>Raw from Python:</strong></p>
-              <pre>${data.rawExtractedText || 'None'}</pre>
-              <p><strong>Cleaned:</strong></p>
-              <pre>${data.cleanedExtractedText || 'None'}</pre>
-              <p><strong>Processed for parsing:</strong></p>
-              <pre>${data.processedExtractedText || 'None'}</pre>
-            </div>
+            ${showDebugDetails ? `
+              <div class="card">
+                <h3>Extracted text</h3>
+                <p><strong>Raw from Python:</strong></p>
+                <pre>${escapeHtml(data.rawExtractedText || 'None')}</pre>
+                <p><strong>Cleaned:</strong></p>
+                <pre>${escapeHtml(data.cleanedExtractedText || 'None')}</pre>
+                <p><strong>Processed for parsing:</strong></p>
+                <pre>${escapeHtml(data.processedExtractedText || 'None')}</pre>
+              </div>
+            ` : ''}
             ${data.references.map((ref, index) => `
               <div class="card">
                 <h3>${index + 1}</h3>
-                <div class="citation-text">${ref.reference}</div>
-                <p><strong>Type:</strong> ${ref.type}</p>
-                <p><strong>DOI:</strong> ${ref.doi || 'None'}</p>
-                <p class="confidence-${ref.confidence}"><strong>Confidence:</strong> ${ref.confidence.toUpperCase()}</p>
-                <p><strong>Summary:</strong> ${ref.summary}</p>
-                <p><strong>Recommendations:</strong> ${ref.recommendations.join(' ')}</p>
+                <div class="citation-text">${escapeHtml(ref.reference)}</div>
+                <p><strong>Type:</strong> ${escapeHtml(ref.type)}</p>
+                <p><strong>DOI:</strong> ${escapeHtml(ref.doi || 'None')}</p>
+                <p class="confidence-${escapeHtml(ref.confidence)}"><strong>Confidence:</strong> ${escapeHtml(ref.confidence.toUpperCase())}</p>
+                <p><strong>Summary:</strong> ${escapeHtml(ref.summary)}</p>
+                ${renderEvidence(ref.evidence)}
+                <p><strong>Recommendations:</strong> ${escapeHtml(ref.recommendations.join(' '))}</p>
               </div>
             `).join('')}
           `;
