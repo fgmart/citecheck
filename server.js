@@ -5,8 +5,18 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.0.10';
+const ENGINE_VERSION = 'citecheck-v2.1.0';
+const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 fs.mkdirSync(uploadsDir, { recursive: true });
+
+function debugLog(message, detail) {
+  if (!DEBUG_PARSER) return;
+  if (detail !== undefined) {
+    console.log(`[parser] ${message}`, detail);
+  } else {
+    console.log(`[parser] ${message}`);
+  }
+}
 
 function normalizeText(text) {
   return text.replace(/\s+/g, ' ').trim();
@@ -57,19 +67,31 @@ function reorderTextForColumns(text) {
   return reordered.join('\n\n');
 }
 
-function extractReferencesFromText(text) {
+function extractReferencesFromText(text, debugSink = null) {
   const lines = text.split(/\r?\n/);
   const referenceHeadingIndex = lines.findIndex((line) => /^references$|^bibliography$/i.test(line.trim()));
   const sectionLines = referenceHeadingIndex >= 0 ? lines.slice(referenceHeadingIndex + 1) : lines;
   const sectionText = sectionLines.join('\n').trim();
 
-  if (!sectionText) return [];
+  const emitDebug = (message, detail) => {
+    debugLog(message, detail);
+    if (debugSink) debugSink.push(typeof detail === 'undefined' ? message : `${message}: ${JSON.stringify(detail)}`);
+  };
+
+  emitDebug('raw section length', sectionText.length);
+  emitDebug('reference heading index', referenceHeadingIndex);
+
+  if (!sectionText) {
+    emitDebug('no section text found');
+    return [];
+  }
 
   const doiRegex = /10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i;
   const lineBasedReferences = [];
   let currentLineReference = '';
+  const sectionLinesForDebug = sectionText.split(/\r?\n/);
 
-  for (const rawLine of sectionText.split(/\r?\n/)) {
+  for (const rawLine of sectionLinesForDebug) {
     const line = rawLine.trim();
     if (!line) {
       if (currentLineReference) {
@@ -92,12 +114,17 @@ function extractReferencesFromText(text) {
 
   if (currentLineReference) lineBasedReferences.push(currentLineReference.trim());
 
+  emitDebug('line-based references', lineBasedReferences);
+
   if (lineBasedReferences.length > 1) {
+    emitDebug('using line-based extraction');
     return lineBasedReferences.filter(Boolean).slice(0, 40);
   }
 
   const markerRegex = /(?<!\S)(\[(?:\d{1,3})\]|(?:[1-9]\d{0,2})[.)])(?=\s+(?:[A-Za-z"'“]))/g;
   const matches = Array.from(sectionText.matchAll(markerRegex));
+
+  emitDebug('marker regex matches', matches.map((match) => ({ index: match.index, value: match[0] })));
 
   if (matches.length > 0) {
     const starts = matches.map((match) => match.index);
@@ -117,6 +144,7 @@ function extractReferencesFromText(text) {
       if (chunk) references.push(chunk);
     }
 
+    emitDebug('regex-based references', references);
     return references.filter(Boolean).slice(0, 40);
   }
 
@@ -143,6 +171,7 @@ function extractReferencesFromText(text) {
   }
 
   if (current) references.push(current.trim());
+  emitDebug('fallback references', references);
   return references.filter(Boolean).slice(0, 40);
 }
 
@@ -277,7 +306,13 @@ function extractPdfText(pdfPath) {
   const output = execFileSync(venvPython, [scriptPath, pdfPath], { encoding: 'utf8' });
   const cleaned = cleanExtractedText(output);
   const withoutHeaders = stripPageHeaders(cleaned);
-  return reorderTextForColumns(withoutHeaders);
+  const reordered = reorderTextForColumns(withoutHeaders);
+  return {
+    raw: output,
+    cleaned,
+    withoutHeaders,
+    processed: reordered
+  };
 }
 
 async function handleAnalyze(req, res) {
@@ -294,6 +329,7 @@ async function handleAnalyze(req, res) {
 
     const parts = parseMultipartBody(body, boundary[1]);
     const pdfPart = parts.find((part) => /name="pdf"/i.test(part.headerText));
+    const debugRequested = parts.some((part) => /name="debug"/i.test(part.headerText));
 
     if (!pdfPart) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -306,8 +342,9 @@ async function handleAnalyze(req, res) {
     const tempPath = path.join(uploadsDir, `${Date.now()}-${fileName}`);
     fs.writeFileSync(tempPath, pdfPart.contentBuffer);
 
-    const text = extractPdfText(tempPath);
-    const references = extractReferencesFromText(text);
+    const extracted = extractPdfText(tempPath);
+    const debugOutput = [];
+    const references = extractReferencesFromText(extracted.processed, debugRequested ? debugOutput : null);
     const analyzed = await Promise.all(references.map(analyzeReference));
 
     fs.unlinkSync(tempPath);
@@ -315,10 +352,14 @@ async function handleAnalyze(req, res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       filename: fileName,
-      totalCharacters: text.length,
+      totalCharacters: extracted.processed.length,
       referencesFound: analyzed.length,
       references: analyzed,
-      engineVersion: ENGINE_VERSION
+      engineVersion: ENGINE_VERSION,
+      debugOutput: debugRequested ? debugOutput.join('\n') : null,
+      rawExtractedText: extracted.raw,
+      cleanedExtractedText: extracted.cleaned,
+      processedExtractedText: extracted.processed
     }));
   } catch (error) {
     console.error(error);

@@ -20,15 +20,23 @@
     <p>Upload a paper PDF to extract and review its references.</p>
     <p><strong>Engine:</strong> <span id="engine-version">loading…</span></p>
     <form id="upload-form">
+      <label>
+        <input id="debug-toggle" type="checkbox" />
+        Enable parser debug traces
+      </label>
+      <br /><br />
       <input type="file" name="pdf" accept="application/pdf" required />
       <button type="submit">Analyze PDF</button>
     </form>
+    <div id="debug-output" class="card" style="display:none;"></div>
     <div id="result"></div>
 
     <script>
       const form = document.getElementById('upload-form');
       const result = document.getElementById('result');
       const engineVersion = document.getElementById('engine-version');
+      const debugToggle = document.getElementById('debug-toggle');
+      const debugOutput = document.getElementById('debug-output');
 
       async function loadEngineVersion() {
         try {
@@ -48,6 +56,16 @@
         result.innerHTML = '<p>Analyzing...</p>';
 
         try {
+          if (debugToggle.checked) {
+            formData.set('debug', 'true');
+            debugOutput.style.display = 'block';
+            debugOutput.innerHTML = '<p>Waiting for parser trace...</p>';
+          } else {
+            formData.delete('debug');
+            debugOutput.style.display = 'none';
+            debugOutput.innerHTML = '';
+          }
+
           const response = await fetch('/api/analyze', {
             method: 'POST',
             body: formData
@@ -55,11 +73,24 @@
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || 'Analysis failed');
 
+          if (data.debugOutput) {
+            debugOutput.innerHTML = `<pre>${data.debugOutput}</pre>`;
+          }
+
           result.innerHTML = `
             <div class="card">
               <h2>Results for ${data.filename}</h2>
               <p><strong>References found:</strong> ${data.referencesFound}</p>
               <p><strong>Engine version:</strong> ${data.engineVersion || 'unknown'}</p>
+            </div>
+            <div class="card">
+              <h3>Extracted text</h3>
+              <p><strong>Raw from Python:</strong></p>
+              <pre>${data.rawExtractedText || 'None'}</pre>
+              <p><strong>Cleaned:</strong></p>
+              <pre>${data.cleanedExtractedText || 'None'}</pre>
+              <p><strong>Processed for parsing:</strong></p>
+              <pre>${data.processedExtractedText || 'None'}</pre>
             </div>
             ${data.references.map((ref, index) => `
               <div class="card">
