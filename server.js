@@ -11,6 +11,7 @@ const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
 const CROSSREF_RETRIES = Number(process.env.CROSSREF_RETRIES || 4);
 const CROSSREF_MIN_INTERVAL_MS = Number(process.env.CROSSREF_MIN_INTERVAL_MS || 1500);
+const CITECHECK_MAX_REFERENCES = Number(process.env.CITECHECK_MAX_REFERENCES || 100);
 let nextCrossrefRequestAt = 0;
 fs.mkdirSync(uploadsDir, { recursive: true });
 
