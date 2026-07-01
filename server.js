@@ -128,7 +128,7 @@ function extractReferencesFromText(text, debugSink = null) {
 
   if (lineBasedReferences.length > 1) {
     emitDebug('using line-based extraction');
-    return lineBasedReferences.filter(Boolean).slice(0, 40);
+    return lineBasedReferences.filter(Boolean).slice(0, CITECHECK_MAX_REFERENCES);
   }
 
   const markerRegex = /(?<!\S)(\[(?:\d{1,3})\]|(?:[1-9]\d{0,2})[.)])(?=\s+(?:[A-Za-z"'“]))/g;
@@ -155,7 +155,7 @@ function extractReferencesFromText(text, debugSink = null) {
     }
 
     emitDebug('regex-based references', references);
-    return references.filter(Boolean).slice(0, 40);
+    return references.filter(Boolean).slice(0, CITECHECK_MAX_REFERENCES);
   }
 
   const references = [];
@@ -182,7 +182,7 @@ function extractReferencesFromText(text, debugSink = null) {
 
   if (current) references.push(current.trim());
   emitDebug('fallback references', references);
-  return references.filter(Boolean).slice(0, 40);
+  return references.filter(Boolean).slice(0, CITECHECK_MAX_REFERENCES);
 }
 
 function inferReferenceType(reference) {
