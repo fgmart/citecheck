@@ -59,6 +59,13 @@
         `;
       }
 
+      function renderDoi(doi) {
+        if (!doi) return 'None';
+        const doiText = String(doi).replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '');
+        const doiUrl = `https://doi.org/${doiText}`;
+        return `<a href="${escapeHtml(doiUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doiText)}</a>`;
+      }
+
       function renderProgress(message, detail = '') {
         result.innerHTML = `
           <div class="card">
@@ -177,7 +184,7 @@
                 <h3>${index + 1}</h3>
                 <div class="citation-text">${escapeHtml(ref.reference)}</div>
                 <p><strong>Type:</strong> ${escapeHtml(ref.type)}</p>
-                <p><strong>DOI:</strong> ${escapeHtml(ref.doi || 'None')}</p>
+                <p><strong>DOI:</strong> ${renderDoi(ref.doi)}</p>
                 <p class="confidence-${escapeHtml(ref.confidence)}"><strong>Confidence:</strong> ${escapeHtml(ref.confidence.toUpperCase())}</p>
                 <p><strong>Summary:</strong> ${escapeHtml(ref.summary)}</p>
                 ${renderEvidence(ref.evidence)}

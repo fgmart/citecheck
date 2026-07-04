@@ -62,3 +62,6 @@ Then open http://localhost:3000 in your browser.
 - Codex made parsing improvements. It is a lot better.
 - Still have stuff bleeding over from adjacent column into parsed output. Can exercise when references start on page with text next to them.
 - Reduced min wait on Crossref to 500 ms. Seems to still work fine.
+
+## 2.2.1 2026-07-04
+- made displayed DOI clickable.
