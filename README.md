@@ -57,3 +57,8 @@ Then open http://localhost:3000 in your browser.
 - maybe ask it for a launch script.
 - then move on to the OpenAlex - I have an API key for that already.
 - checking in these files now.
+
+## v2.2.0 2026-07-04
+- Codex made parsing improvements. It is a lot better.
+- Still have stuff bleeding over from adjacent column into parsed output. Can exercise when references start on page with text next to them.
+- Reduced min wait on Crossref to 500 ms. Seems to still work fine.

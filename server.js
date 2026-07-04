@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.1.5';
+const ENGINE_VERSION = 'citecheck-v2.2.0';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -75,6 +75,13 @@ function reorderTextForColumns(text) {
   }
 
   return reordered.join('\n\n');
+}
+
+function looksLikeExtractedReferences(text) {
+  const markerLines = text
+    .split(/\r?\n/)
+    .filter((line) => /^(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])\s+/.test(line.trim()));
+  return markerLines.length >= 3;
 }
 
 function extractReferencesFromText(text, debugSink = null) {
@@ -569,7 +576,9 @@ function extractPdfText(pdfPath) {
   const output = execFileSync(venvPython, [scriptPath, pdfPath], { encoding: 'utf8' });
   const cleaned = cleanExtractedText(output);
   const withoutHeaders = stripPageHeaders(cleaned);
-  const reordered = reorderTextForColumns(withoutHeaders);
+  const reordered = looksLikeExtractedReferences(withoutHeaders)
+    ? withoutHeaders
+    : reorderTextForColumns(withoutHeaders);
   return {
     raw: output,
     cleaned,
@@ -729,6 +738,7 @@ module.exports = {
   analyzeReference,
   cleanExtractedText,
   reorderTextForColumns,
+  looksLikeExtractedReferences,
   stripPageHeaders,
   buildAnalyzeResponse,
   scoreCandidateMatch,
