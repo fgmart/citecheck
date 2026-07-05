@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.1';
+const ENGINE_VERSION = 'citecheck-v2.2.2';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -213,7 +213,11 @@ function extractTitleCandidate(reference) {
   const withoutNumbers = reference.replace(/^(\[\d+\]|\d+[.)]\s*)/, '').trim();
   const withoutDoi = withoutNumbers.replace(/10\.\d{4,9}\/[\-._;()/:A-Z0-9]+/gi, '').trim();
   const withoutUrl = withoutDoi.replace(/https?:\/\/\S+/gi, '').trim();
-  const segments = withoutUrl
+  const year = extractYear(withoutUrl);
+  const titleSource = year && withoutUrl.includes(String(year))
+    ? withoutUrl.slice(withoutUrl.indexOf(String(year)) + String(year).length)
+    : withoutUrl;
+  const segments = titleSource
     .split(/\.\s*/)
     .map((segment) => segment.trim())
     .filter(Boolean);
@@ -228,6 +232,67 @@ function extractTitleCandidate(reference) {
 function extractYear(reference) {
   const match = reference.match(/\b(19|20)\d{2}\b/);
   return match ? Number(match[0]) : null;
+}
+
+function cleanReferenceForMetadata(reference) {
+  return reference
+    .replace(/^(\[\d+\]|\d+[.)]\s*)/, '')
+    .replace(/\barXiv:\S+/gi, '')
+    .replace(/\bdoi:\s*10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi, '')
+    .replace(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi, '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractAuthorsCandidate(reference) {
+  const cleaned = cleanReferenceForMetadata(reference);
+  const year = extractYear(cleaned);
+  const beforeYear = year ? cleaned.slice(0, cleaned.indexOf(String(year))).trim() : cleaned.split(/\.\s+/)[0] || '';
+  return beforeYear.replace(/[.,;:\s]+$/g, '').slice(0, 240);
+}
+
+function extractVenueCandidate(reference) {
+  const cleaned = cleanReferenceForMetadata(reference);
+  const title = extractTitleCandidate(reference);
+  let afterTitle = cleaned;
+  const titleIndex = title ? cleaned.toLowerCase().indexOf(title.toLowerCase()) : -1;
+  if (titleIndex >= 0) afterTitle = cleaned.slice(titleIndex + title.length);
+
+  const venuePatterns = [
+    /\b(?:In\s+)?(Proceedings[^.]+)\./i,
+    /\b((?:ACM|IEEE|Journal|Computers?|Education|Educational|Interactive|Technology|Research|Review|Communications|Transactions|Conference|Proc\.)[^.]+)\./i
+  ];
+
+  for (const pattern of venuePatterns) {
+    const match = afterTitle.match(pattern);
+    if (match && match[1]) return match[1].replace(/^\s*In\s+/i, '').trim();
+  }
+
+  const segments = afterTitle
+    .split(/\.\s*/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const venue = segments.find((segment) => /(journal|proc|proceedings|conference|transactions|education|review|communications|press|springer|ieee|acm|sage|wiley)/i.test(segment));
+  return venue ? venue.slice(0, 240) : '';
+}
+
+function extractReferenceMetadata(reference) {
+  return {
+    authors: extractAuthorsCandidate(reference),
+    date: extractYear(reference) ? String(extractYear(reference)) : '',
+    title: extractTitleCandidate(reference),
+    venue: extractVenueCandidate(reference)
+  };
+}
+
+function candidateMetadata(candidate = {}) {
+  return {
+    authors: candidate.authors || '',
+    date: candidate.year ? String(candidate.year) : '',
+    title: candidate.title || '',
+    venue: candidate.containerTitle || candidate.publisher || ''
+  };
 }
 
 function tokenize(text) {
@@ -439,11 +504,13 @@ function describeLookupError(error) {
 async function analyzeReference(reference) {
   const doi = extractDoi(reference);
   const type = inferReferenceType(reference);
+  const extractedMetadata = extractReferenceMetadata(reference);
   let confidence = 'low';
   let summary = 'No DOI detected. Best-effort verification will rely on author/title/journal matching.';
   let recommendations = ['Consider adding a DOI or a stable URL for the cited work.'];
   let evidence = [];
   let doiFound = null;
+  let matchedMetadata = candidateMetadata();
 
   if (doi) {
     try {
@@ -451,6 +518,7 @@ async function analyzeReference(reference) {
       const match = scoreCandidateMatch(reference, candidate);
       confidence = match.confidence;
       doiFound = candidate.doi || doi;
+      matchedMetadata = candidateMetadata(candidate);
       summary = `DOI resolved in Crossref: ${describeCandidate(candidate)}.`;
       evidence = [
         `Crossref title: ${candidate.title || 'not available'}`,
@@ -477,6 +545,7 @@ async function analyzeReference(reference) {
       if (best) {
         confidence = best.match.confidence;
         doiFound = best.doi;
+        matchedMetadata = candidateMetadata(best);
         summary = `No DOI was present in the citation. Best Crossref candidate: ${describeCandidate(best)}.`;
         recommendations = ['Add an explicit DOI or stable URL if available and verify the reference metadata.'];
         evidence = [
@@ -510,6 +579,10 @@ async function analyzeReference(reference) {
     type,
     doi: doiFound || doi,
     confidence,
+    metadata: {
+      extracted: extractedMetadata,
+      matched: matchedMetadata
+    },
     summary,
     recommendations,
     evidence,
@@ -749,5 +822,6 @@ module.exports = {
   describeLookupError,
   waitForCrossrefSlot,
   extractTitleCandidate,
+  extractReferenceMetadata,
   extractYear
 };

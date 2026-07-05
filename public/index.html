@@ -11,6 +11,9 @@
       .confidence-medium { color: #b07d00; font-weight: bold; }
       .confidence-low { color: #b00020; font-weight: bold; }
       .citation-text { white-space: pre-wrap; background: #f7f7f7; padding: 0.75rem; border-radius: 6px; margin-top: 0.5rem; }
+      .metadata-table { width: 100%; border-collapse: collapse; margin: 1rem 0; table-layout: fixed; }
+      .metadata-table th, .metadata-table td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+      .metadata-table th { background: #f7f7f7; }
       button { padding: 0.6rem 1rem; cursor: pointer; }
       pre { white-space: pre-wrap; background: #f7f7f7; padding: 1rem; border-radius: 6px; }
     </style>
@@ -64,6 +67,42 @@
         const doiText = String(doi).replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '');
         const doiUrl = `https://doi.org/${doiText}`;
         return `<a href="${escapeHtml(doiUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doiText)}</a>`;
+      }
+
+      function metadataValue(metadata, key) {
+        return metadata && metadata[key] ? metadata[key] : 'Not found';
+      }
+
+      function renderMetadataComparison(metadata = {}) {
+        const extracted = metadata.extracted || {};
+        const matched = metadata.matched || {};
+        const rows = [
+          ['Authors', 'authors'],
+          ['Date', 'date'],
+          ['Title of work', 'title'],
+          ['Publication venue', 'venue']
+        ];
+
+        return `
+          <table class="metadata-table">
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Extracted citation</th>
+                <th>Found reference</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(([label, key]) => `
+                <tr>
+                  <th scope="row">${escapeHtml(label)}</th>
+                  <td>${escapeHtml(metadataValue(extracted, key))}</td>
+                  <td>${escapeHtml(metadataValue(matched, key))}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
       }
 
       function renderProgress(message, detail = '') {
@@ -185,6 +224,7 @@
                 <div class="citation-text">${escapeHtml(ref.reference)}</div>
                 <p><strong>Type:</strong> ${escapeHtml(ref.type)}</p>
                 <p><strong>DOI:</strong> ${renderDoi(ref.doi)}</p>
+                ${renderMetadataComparison(ref.metadata)}
                 <p class="confidence-${escapeHtml(ref.confidence)}"><strong>Confidence:</strong> ${escapeHtml(ref.confidence.toUpperCase())}</p>
                 <p><strong>Summary:</strong> ${escapeHtml(ref.summary)}</p>
                 ${renderEvidence(ref.evidence)}

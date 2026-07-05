@@ -1,0 +1,5 @@
+.venv/
+examples/
+analyze.ndjson
+uploads/
+.vscode/settings.json

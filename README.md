@@ -28,16 +28,18 @@ exec /usr/bin/node server.js
 
 Then open http://localhost:3000 in your browser.
 
-## Notes
-- The current version is a strong first pass and uses Crossref for DOI-based checking.
-- It is designed for local-first use and can be extended with richer citation matching and more authoritative sources.
-- Build rule: increment the most minor version number on each new build (for example, 2.0.1 -> 2.0.2 -> 2.0.3).
+# Version History
 
-## Todo - 2026-06-28
-- It's making errors with the parsing of the references, including even the first one, where it fails to end it with "ACM Transactions on Computing Education (2022)" and instead pulls in a DOI from reference [6]. 
-- I feel like I need to see the output from the PDFtotext thing in order to debug.
-- I want to put a debug harness in - e.g., Console.log()?
-- Also I am pretty sure the 2-col thing was a wild goose chase. I want to look at the PDF to text output.
+## 2.2.2 2026-07-05
+- display results with comparison card
+
+## 2.2.1 2026-07-04
+- made displayed DOI clickable.
+
+## v2.2.0 2026-07-04
+- Codex made parsing improvements. It is a lot better.
+- Still have stuff bleeding over from adjacent column into parsed output. Can exercise when references start on page with text next to them.
+- Reduced min wait on Crossref to 500 ms. Seems to still work fine.
 
 ## 2026-06-29
 - still in GH Copilot, adding debug to the main view. Then I saw how messed up the PDFtotext was scrambling the refs. I asked it to think about a visual blocking solution, and amazingly it solved it.
@@ -58,10 +60,13 @@ Then open http://localhost:3000 in your browser.
 - then move on to the OpenAlex - I have an API key for that already.
 - checking in these files now.
 
-## v2.2.0 2026-07-04
-- Codex made parsing improvements. It is a lot better.
-- Still have stuff bleeding over from adjacent column into parsed output. Can exercise when references start on page with text next to them.
-- Reduced min wait on Crossref to 500 ms. Seems to still work fine.
+## Todo - 2026-06-28
+- It's making errors with the parsing of the references, including even the first one, where it fails to end it with "ACM Transactions on Computing Education (2022)" and instead pulls in a DOI from reference [6]. 
+- I feel like I need to see the output from the PDFtotext thing in order to debug.
+- I want to put a debug harness in - e.g., Console.log()?
+- Also I am pretty sure the 2-col thing was a wild goose chase. I want to look at the PDF to text output.
 
-## 2.2.1 2026-07-04
-- made displayed DOI clickable.
+## Notes
+- The current version is a strong first pass and uses Crossref for DOI-based checking.
+- It is designed for local-first use and can be extended with richer citation matching and more authoritative sources.
+- Build rule: increment the most minor version number on each new build (for example, 2.0.1 -> 2.0.2 -> 2.0.3).
