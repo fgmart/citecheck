@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.4';
+const ENGINE_VERSION = 'citecheck-v2.2.5';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -381,9 +381,14 @@ function getCrossrefYear(work = {}) {
   return Array.isArray(dateParts) && Array.isArray(dateParts[0]) ? dateParts[0][0] : null;
 }
 
+function formatCrossrefAuthor(author = {}) {
+  if (author.name) return author.name;
+  return [author.given, author.family].filter(Boolean).join(' ') || author.family || '';
+}
+
 function normalizeCrossrefWork(work = {}) {
   const authors = Array.isArray(work.author)
-    ? work.author.map((author) => author.family || author.name || [author.given, author.family].filter(Boolean).join(' ')).filter(Boolean).slice(0, 8).join(', ')
+    ? work.author.map(formatCrossrefAuthor).filter(Boolean).slice(0, 8).join(', ')
     : '';
 
   return {

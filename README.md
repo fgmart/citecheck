@@ -30,7 +30,10 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
-## 2.2.4 2026-06-05
+## 2.2.5 2026-07-05
+- display author first names from Crossref
+
+## 2.2.4 2026-07-05
 - fixed issue with references starting in right column and the parser was pulling text from left column
 
 ## 2.2.3 2026-07-05
