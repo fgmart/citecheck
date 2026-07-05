@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.9';
+const ENGINE_VERSION = 'citecheck-v2.2.10';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -271,6 +271,12 @@ function metadataMatched(left, right, normalizer = normalizeMetadataValue) {
   return Boolean(left && right && normalizer(left) === normalizer(right));
 }
 
+function extractTrailingPageRange(text) {
+  const matches = Array.from(normalizeText(text).matchAll(/\b(\d+\s*[–—-]\s*\d+)\b/g));
+  if (!matches.length) return '';
+  return matches[matches.length - 1][1].trim();
+}
+
 function extractPublicationDetails(reference) {
   const cleaned = cleanReferenceForMetadata(reference);
   const title = extractTitleCandidate(reference);
@@ -321,7 +327,7 @@ function extractPublicationDetails(reference) {
         venue: match[1].replace(/^\s*In\s+/i, '').trim(),
         volume: '',
         issue: '',
-        pages: ''
+        pages: extractTrailingPageRange(afterTitle)
       };
     }
   }
@@ -335,7 +341,7 @@ function extractPublicationDetails(reference) {
     venue: venue ? venue.slice(0, 240) : '',
     volume: '',
     issue: '',
-    pages: ''
+    pages: extractTrailingPageRange(afterTitle)
   };
 }
 
