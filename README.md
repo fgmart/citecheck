@@ -30,6 +30,9 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
+## 2.2.8 2026-07-05
+- extract and compare volume, issue, and pages
+
 ## 2.2.7 2026-07-05
 - allow full paper upload
 

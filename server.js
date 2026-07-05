@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.7';
+const ENGINE_VERSION = 'citecheck-v2.2.8';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -253,11 +253,61 @@ function extractAuthorsCandidate(reference) {
 }
 
 function extractVenueCandidate(reference) {
+  return extractPublicationDetails(reference).venue;
+}
+
+function normalizePageRange(value) {
+  return normalizeText(value || '')
+    .replace(/\s*[–—-]\s*/g, '-')
+    .replace(/[.,;:\s]+$/g, '')
+    .toLowerCase();
+}
+
+function normalizeMetadataValue(value) {
+  return normalizeText(value || '').replace(/[.,;:\s]+$/g, '').toLowerCase();
+}
+
+function metadataMatched(left, right, normalizer = normalizeMetadataValue) {
+  return Boolean(left && right && normalizer(left) === normalizer(right));
+}
+
+function extractPublicationDetails(reference) {
   const cleaned = cleanReferenceForMetadata(reference);
   const title = extractTitleCandidate(reference);
   let afterTitle = cleaned;
   const titleIndex = title ? cleaned.toLowerCase().indexOf(title.toLowerCase()) : -1;
   if (titleIndex >= 0) afterTitle = cleaned.slice(titleIndex + title.length);
+  afterTitle = afterTitle.replace(/^[.,\s]+/, '').trim();
+
+  const journalWithIssue = afterTitle.match(/^(.+?)\s+(\d+[A-Za-z]?),\s*([A-Za-z0-9-]+)\s*\((?:19|20)\d{2}\),\s*([^.;]+(?:[–—-][^.;]+)?)/);
+  if (journalWithIssue) {
+    return {
+      venue: journalWithIssue[1].replace(/^\s*In\s+/i, '').trim(),
+      volume: journalWithIssue[2].trim(),
+      issue: journalWithIssue[3].trim(),
+      pages: journalWithIssue[4].trim()
+    };
+  }
+
+  const journalWithoutIssue = afterTitle.match(/^(.+?)\s+(\d+[A-Za-z]?)\s*\((?:19|20)\d{2}\),\s*([^.;]+(?:[–—-][^.;]+)?)/);
+  if (journalWithoutIssue) {
+    return {
+      venue: journalWithoutIssue[1].replace(/^\s*In\s+/i, '').trim(),
+      volume: journalWithoutIssue[2].trim(),
+      issue: '',
+      pages: journalWithoutIssue[3].trim()
+    };
+  }
+
+  const articleDetails = afterTitle.match(/^(.+?)\s+(\d+[A-Za-z]?),\s*([A-Za-z0-9-]+),\s*(Article\s+[^,(]+).*?,\s*([^.;]*pages?)/i);
+  if (articleDetails) {
+    return {
+      venue: articleDetails[1].replace(/^\s*In\s+/i, '').trim(),
+      volume: articleDetails[2].trim(),
+      issue: articleDetails[3].trim(),
+      pages: `${articleDetails[4].trim()}, ${articleDetails[5].trim()}`
+    };
+  }
 
   const venuePatterns = [
     /\b(?:In\s+)?(Proceedings[^.]+)\./i,
@@ -266,7 +316,14 @@ function extractVenueCandidate(reference) {
 
   for (const pattern of venuePatterns) {
     const match = afterTitle.match(pattern);
-    if (match && match[1]) return match[1].replace(/^\s*In\s+/i, '').trim();
+    if (match && match[1]) {
+      return {
+        venue: match[1].replace(/^\s*In\s+/i, '').trim(),
+        volume: '',
+        issue: '',
+        pages: ''
+      };
+    }
   }
 
   const segments = afterTitle
@@ -274,15 +331,24 @@ function extractVenueCandidate(reference) {
     .map((segment) => segment.trim())
     .filter(Boolean);
   const venue = segments.find((segment) => /(journal|proc|proceedings|conference|transactions|education|review|communications|press|springer|ieee|acm|sage|wiley)/i.test(segment));
-  return venue ? venue.slice(0, 240) : '';
+  return {
+    venue: venue ? venue.slice(0, 240) : '',
+    volume: '',
+    issue: '',
+    pages: ''
+  };
 }
 
 function extractReferenceMetadata(reference) {
+  const publication = extractPublicationDetails(reference);
   return {
     authors: extractAuthorsCandidate(reference),
     date: extractYear(reference) ? String(extractYear(reference)) : '',
     title: extractTitleCandidate(reference),
-    venue: extractVenueCandidate(reference)
+    venue: publication.venue,
+    volume: publication.volume,
+    issue: publication.issue,
+    pages: publication.pages
   };
 }
 
@@ -291,7 +357,10 @@ function candidateMetadata(candidate = {}) {
     authors: candidate.authors || '',
     date: candidate.year ? String(candidate.year) : '',
     title: candidate.title || '',
-    venue: candidate.containerTitle || candidate.publisher || ''
+    venue: candidate.containerTitle || candidate.publisher || '',
+    volume: candidate.volume || '',
+    issue: candidate.issue || '',
+    pages: candidate.pages || ''
   };
 }
 
@@ -322,6 +391,7 @@ function formatScoreLabel(score) {
 }
 
 function scoreCandidateMatch(reference, candidate = {}) {
+  const extractedMetadata = extractReferenceMetadata(reference);
   const referenceTitle = extractTitleCandidate(reference);
   const titleScore = candidate.title ? Math.max(tokenOverlapScore(referenceTitle, candidate.title), tokenOverlapScore(reference, candidate.title)) : 0;
   const venueScore = candidate.containerTitle ? tokenOverlapScore(reference, candidate.containerTitle) : 0;
@@ -334,9 +404,13 @@ function scoreCandidateMatch(reference, candidate = {}) {
   const yearScore = yearMatched ? 1 : 0;
   const doiMatched = Boolean(candidate.doi && extractDoi(reference) && normalizeDoi(candidate.doi) === extractDoi(reference));
   const doiBonus = doiMatched ? 0.2 : 0;
+  const volumeMatched = metadataMatched(extractedMetadata.volume, candidate.volume);
+  const issueMatched = metadataMatched(extractedMetadata.issue, candidate.issue);
+  const pagesMatched = metadataMatched(extractedMetadata.pages, candidate.pages, normalizePageRange);
+  const publicationDetailBonus = [volumeMatched, issueMatched, pagesMatched].filter(Boolean).length * 0.03;
   const yearPenalty = severeYearMismatch ? 0.35 : yearMismatched ? 0.15 : 0;
   const weakTitlePenalty = titleScore < 0.25 ? 0.15 : 0;
-  const score = Math.max(0, Math.min(1, titleScore * 0.5 + authorScore * 0.2 + yearScore * 0.15 + venueScore * 0.1 + doiBonus - yearPenalty - weakTitlePenalty));
+  const score = Math.max(0, Math.min(1, titleScore * 0.5 + authorScore * 0.2 + yearScore * 0.15 + venueScore * 0.1 + doiBonus + publicationDetailBonus - yearPenalty - weakTitlePenalty));
 
   let confidence = 'low';
   if (score >= 0.75 && titleScore >= 0.45) confidence = 'high';
@@ -357,6 +431,16 @@ function scoreCandidateMatch(reference, candidate = {}) {
     evidence.push(`Candidate year: ${candidate.year}`);
   }
 
+  if (extractedMetadata.volume || candidate.volume) {
+    evidence.push(volumeMatched ? `Volume matched: ${candidate.volume}` : `Volume mismatch: cited ${extractedMetadata.volume || 'unavailable'}, candidate ${candidate.volume || 'unavailable'}`);
+  }
+  if (extractedMetadata.issue || candidate.issue) {
+    evidence.push(issueMatched ? `Issue matched: ${candidate.issue}` : `Issue mismatch: cited ${extractedMetadata.issue || 'unavailable'}, candidate ${candidate.issue || 'unavailable'}`);
+  }
+  if (extractedMetadata.pages || candidate.pages) {
+    evidence.push(pagesMatched ? `Pages matched: ${candidate.pages}` : `Pages mismatch: cited ${extractedMetadata.pages || 'unavailable'}, candidate ${candidate.pages || 'unavailable'}`);
+  }
+
   if (doiMatched) evidence.push('DOI exactly matched');
 
   return {
@@ -367,6 +451,9 @@ function scoreCandidateMatch(reference, candidate = {}) {
       titleScore,
       authorScore,
       venueScore,
+      volumeMatched,
+      issueMatched,
+      pagesMatched,
       yearMatched,
       yearMismatched,
       severeYearMismatch,
