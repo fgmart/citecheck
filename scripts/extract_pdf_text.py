@@ -72,8 +72,12 @@ def split_inline_references(text):
     return chunks
 
 
+def has_inline_reference_start(text):
+    return bool(INLINE_REFERENCE_START_RE.search(text))
+
+
 def cluster_columns(blocks, page_width):
-    reference_blocks = [block for block in blocks if is_reference_start(block[4])]
+    reference_blocks = [block for block in blocks if is_reference_start(block[4]) or has_inline_reference_start(block[4])]
     if len(reference_blocks) < 2:
         return [sorted(blocks, key=lambda b: (b[1], b[0]))]
 
@@ -106,6 +110,14 @@ def ordered_blocks(page):
 
     if not blocks:
         return []
+
+    blocks = [
+        block for block in blocks
+        if not (
+            (block[1] < page.rect.height * 0.1 and not REFERENCE_HEADING_RE.match(block[4]) and not has_inline_reference_start(block[4]))
+            or block[1] > page.rect.height * 0.94
+        )
+    ]
 
     reference_heading = next((block for block in blocks if REFERENCE_HEADING_RE.match(block[4])), None)
     if reference_heading and reference_heading[0] > page.rect.width * 0.35:
