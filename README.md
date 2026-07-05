@@ -30,6 +30,9 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
+## 2.2.6 2026-07-05
+- fixed issue with titles with colons
+
 ## 2.2.5 2026-07-05
 - display author first names from Crossref
 

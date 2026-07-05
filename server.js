@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.5';
+const ENGINE_VERSION = 'citecheck-v2.2.6';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -223,10 +223,10 @@ function extractTitleCandidate(reference) {
     .filter(Boolean);
   const titleCandidate = segments.find((segment) => {
     const words = segment.split(/\s+/).filter(Boolean);
-    return words.length >= 3 && !/[,:;]/.test(segment) && !/(journal|proc|transactions|conference|press|springer|ieee|acm|arxiv|doi|https?)/i.test(segment);
+    return words.length >= 3 && !/[;]/.test(segment) && !/(journal|proc|transactions|conference|press|springer|ieee|acm|arxiv|doi|https?)/i.test(segment);
   });
 
-  return titleCandidate || withoutUrl.slice(0, 160);
+  return titleCandidate || titleSource.replace(/^[.\s]+/, '').slice(0, 160);
 }
 
 function extractYear(reference) {
