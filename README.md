@@ -19,13 +19,16 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-1. Add your email address to ```start-server.sh``` to be friendly to Crossref (the service we use to validate citations)
+2. Add your email address to ```start-server.sh``` to be friendly to Crossref (the service we use to validate citations)
 
 1. Run ```start-server.sh``` .
 
 1. Open http://localhost:3000 in your browser.
 
 # Version History
+
+## 2.2.14 2026-07-05
+- click on a result chip at the top and it scrolls to that result
 
 ## 2.2.13 2026-07-05
 - updated info for running locally
