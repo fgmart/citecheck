@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.10';
+const ENGINE_VERSION = 'citecheck-v2.2.11';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -285,7 +285,8 @@ function extractPublicationDetails(reference) {
   if (titleIndex >= 0) afterTitle = cleaned.slice(titleIndex + title.length);
   afterTitle = afterTitle.replace(/^[.,\s]+/, '').trim();
 
-  const journalWithIssue = afterTitle.match(/^(.+?)\s+(\d+[A-Za-z]?),\s*([A-Za-z0-9-]+)\s*\((?:19|20)\d{2}\),\s*([^.;]+(?:[–—-][^.;]+)?)/);
+  const dateParenthetical = "\\([^)]*(?:19|20)\\d{2}[^)]*\\)";
+  const journalWithIssue = afterTitle.match(new RegExp(`^(.+?)\\s+(\\d+[A-Za-z]?),\\s*([A-Za-z0-9-]+)\\s*${dateParenthetical},\\s*([^.;]+(?:[–—-][^.;]+)?)`));
   if (journalWithIssue) {
     return {
       venue: journalWithIssue[1].replace(/^\s*In\s+/i, '').trim(),
@@ -295,7 +296,7 @@ function extractPublicationDetails(reference) {
     };
   }
 
-  const journalWithoutIssue = afterTitle.match(/^(.+?)\s+(\d+[A-Za-z]?)\s*\((?:19|20)\d{2}\),\s*([^.;]+(?:[–—-][^.;]+)?)/);
+  const journalWithoutIssue = afterTitle.match(new RegExp(`^(.+?)\\s+(\\d+[A-Za-z]?)\\s*${dateParenthetical},\\s*([^.;]+(?:[–—-][^.;]+)?)`));
   if (journalWithoutIssue) {
     return {
       venue: journalWithoutIssue[1].replace(/^\s*In\s+/i, '').trim(),

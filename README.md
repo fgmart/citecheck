@@ -30,6 +30,9 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
+## 2.2.11 2026-07-05
+- improved volume and issue num extraction
+
 ## 2.2.10 2026-07-05
 - improved page range extraction
 
