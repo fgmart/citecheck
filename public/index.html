@@ -17,6 +17,9 @@
       .evidence-row { margin: 0.75rem 0; }
       .evidence-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
       .evidence-chip { display: inline-block; max-width: 100%; border: 1px solid #ddd; background: #f7f7f7; border-radius: 6px; padding: 0.2rem 0.45rem; font-size: 0.9rem; line-height: 1.3; overflow-wrap: anywhere; }
+      .confidence-summary { display: grid; gap: 0.5rem; margin-top: 0.75rem; }
+      .confidence-summary-row { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+      .reference-chip { display: inline-block; border: 1px solid #ddd; background: #f7f7f7; border-radius: 6px; padding: 0.15rem 0.4rem; font-size: 0.9rem; }
       button { padding: 0.6rem 1rem; cursor: pointer; }
       pre { white-space: pre-wrap; background: #f7f7f7; padding: 1rem; border-radius: 6px; }
     </style>
@@ -109,6 +112,35 @@
               `).join('')}
             </tbody>
           </table>
+        `;
+      }
+
+      function renderConfidenceSummary(references = []) {
+        const groups = { high: [], medium: [], low: [] };
+        references.forEach((ref, index) => {
+          const confidence = String(ref.confidence || 'low').toLowerCase();
+          if (!groups[confidence]) groups[confidence] = [];
+          groups[confidence].push(index + 1);
+        });
+
+        return `
+          <div class="card">
+            <h3>Confidence Summary</h3>
+            <div class="confidence-summary">
+              ${[
+                ['HIGH', 'high'],
+                ['MEDIUM', 'medium'],
+                ['LOW', 'low']
+              ].map(([label, key]) => `
+                <div class="confidence-summary-row">
+                  <strong class="confidence-${key}">${label}:</strong>
+                  ${groups[key].length
+                    ? groups[key].map((number) => `<span class="reference-chip">Ref ${number}</span>`).join('')
+                    : '<span>None</span>'}
+                </div>
+              `).join('')}
+            </div>
+          </div>
         `;
       }
 
@@ -226,6 +258,7 @@
                 <pre>${escapeHtml(data.processedExtractedText || 'None')}</pre>
               </div>
             ` : ''}
+            ${renderConfidenceSummary(data.references)}
             ${data.references.map((ref, index) => `
               <div class="card">
                 <h3>${index + 1}</h3>

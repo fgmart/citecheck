@@ -30,6 +30,9 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
+## 2.2.12 2026-07-05
+- display list of papers meeting each of the three confidence criteria at top
+
 ## 2.2.11 2026-07-05
 - improved volume and issue num extraction
 
