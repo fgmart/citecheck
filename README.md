@@ -30,6 +30,9 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
+## 2.2.9 2026-07-05
+- run analysis immediately upon file upload
+
 ## 2.2.8 2026-07-05
 - extract and compare volume, issue, and pages
 

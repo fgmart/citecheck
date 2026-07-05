@@ -31,8 +31,7 @@
         Enable parser debug traces
       </label>
       <br /><br />
-      <input type="file" name="pdf" accept="application/pdf" required />
-      <button type="submit">Analyze PDF</button>
+      <input id="pdf-input" type="file" name="pdf" accept="application/pdf" required />
     </form>
     <div id="debug-output" class="card" style="display:none;"></div>
     <div id="result"></div>
@@ -43,6 +42,7 @@
       const engineVersion = document.getElementById('engine-version');
       const debugToggle = document.getElementById('debug-toggle');
       const debugOutput = document.getElementById('debug-output');
+      const pdfInput = document.getElementById('pdf-input');
 
       function escapeHtml(value) {
         return String(value || '').replace(/[&<>"']/g, (char) => ({
@@ -181,8 +181,9 @@
 
       loadEngineVersion();
 
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
+      async function analyzeSelectedPdf() {
+        if (!pdfInput.files || pdfInput.files.length === 0) return;
+
         const formData = new FormData(form);
         renderProgress('Uploading PDF');
 
@@ -242,7 +243,13 @@
         } catch (err) {
           result.innerHTML = `<p style="color:red">${err.message}</p>`;
         }
+      }
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
       });
+
+      pdfInput.addEventListener('change', analyzeSelectedPdf);
     </script>
   </body>
 </html>
