@@ -4,3 +4,4 @@ analyze.ndjson
 uploads/
 .vscode/settings.json
 scripts/test_extract_pdf_text.py
+start-server.local.sh

@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.12';
+const ENGINE_VERSION = 'citecheck-v2.2.13';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -544,7 +544,7 @@ async function fetchJson(url, options = {}) {
       await waitForCrossrefSlot();
       response = await fetch(url, {
         headers: {
-          'User-Agent': `Citecheck/2.1.4${CROSSREF_MAILTO ? ` (mailto:${CROSSREF_MAILTO})` : ''}`
+          'User-Agent': `${ENGINE_VERSION}${CROSSREF_MAILTO ? ` (mailto:${CROSSREF_MAILTO})` : ''}`
         }
       });
 

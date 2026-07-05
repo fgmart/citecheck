@@ -1,6 +1,6 @@
 # Citecheck
 
-Citecheck is a local web app for reviewing academic references in a PDF paper.
+Citecheck is a web app for reviewing academic references in a PDF paper.
 
 ## What it does
 - Accepts a PDF upload
@@ -12,23 +12,23 @@ Citecheck is a local web app for reviewing academic references in a PDF paper.
 
 ## Run locally
 
-Save the below as ```start-server.sh```
+1. Install PyMuPDF in a virtual environment:
 
 ```
-#!/usr/bin/env bash
-set -euo pipefail
-
-export PORT="${PORT:-3000}"
-export CROSSREF_CONCURRENCY="${CROSSREF_CONCURRENCY:-1}"
-export CROSSREF_RETRIES="${CROSSREF_RETRIES:-4}"
-export CROSSREF_MIN_INTERVAL_MS="${CROSSREF_MIN_INTERVAL_MS:-1500}"
-
-exec /usr/bin/node server.js
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
-Then open http://localhost:3000 in your browser.
+1. Add your email address to ```start-server.sh``` to be friendly to Crossref (the service we use to validate citations)
+
+1. Run ```start-server.sh``` .
+
+1. Open http://localhost:3000 in your browser.
 
 # Version History
+
+## 2.2.13 2026-07-05
+- updated info for running locally
 
 ## 2.2.12 2026-07-05
 - display list of papers meeting each of the three confidence criteria at top
