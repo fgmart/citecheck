@@ -14,6 +14,9 @@
       .metadata-table { width: 100%; border-collapse: collapse; margin: 1rem 0; table-layout: fixed; }
       .metadata-table th, .metadata-table td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
       .metadata-table th { background: #f7f7f7; }
+      .evidence-row { margin: 0.75rem 0; }
+      .evidence-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
+      .evidence-chip { display: inline-block; max-width: 100%; border: 1px solid #ddd; background: #f7f7f7; border-radius: 6px; padding: 0.2rem 0.45rem; font-size: 0.9rem; line-height: 1.3; overflow-wrap: anywhere; }
       button { padding: 0.6rem 1rem; cursor: pointer; }
       pre { white-space: pre-wrap; background: #f7f7f7; padding: 1rem; border-radius: 6px; }
     </style>
@@ -53,12 +56,14 @@
       }
 
       function renderEvidence(evidence) {
-        if (!Array.isArray(evidence) || evidence.length === 0) return '<p><strong>Evidence:</strong> None</p>';
+        if (!Array.isArray(evidence) || evidence.length === 0) return '<p class="evidence-row"><strong>Evidence:</strong> None</p>';
         return `
-          <p><strong>Evidence:</strong></p>
-          <ul>
-            ${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
-          </ul>
+          <div class="evidence-row">
+            <strong>Evidence:</strong>
+            <div class="evidence-list">
+              ${evidence.map((item) => `<span class="evidence-chip">${escapeHtml(item)}</span>`).join('')}
+            </div>
+          </div>
         `;
       }
 

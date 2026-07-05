@@ -30,6 +30,9 @@ Then open http://localhost:3000 in your browser.
 
 # Version History
 
+## 2.2.3 2026-07-05
+- made the data presentation in the "evidence" section more compact
+
 ## 2.2.2 2026-07-05
 - display results with comparison card
 
