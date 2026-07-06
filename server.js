@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.14';
+const ENGINE_VERSION = 'citecheck-v2.2.15';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -81,7 +81,14 @@ function looksLikeExtractedReferences(text) {
   const markerLines = text
     .split(/\r?\n/)
     .filter((line) => /^(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])\s+/.test(line.trim()));
-  return markerLines.length >= 3;
+  const authorDateLines = text
+    .split(/\r?\n/)
+    .filter((line) => looksLikeAuthorDateReferenceStart(line.trim()));
+  return markerLines.length >= 3 || authorDateLines.length >= 3;
+}
+
+function looksLikeAuthorDateReferenceStart(line) {
+  return /^[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+){0,3},\s+.+\((?:19|20)\d{2}(?:[,;)])/.test(line);
 }
 
 function extractReferencesFromText(text, debugSink = null) {
@@ -136,6 +143,30 @@ function extractReferencesFromText(text, debugSink = null) {
   if (lineBasedReferences.length > 1) {
     emitDebug('using line-based extraction');
     return lineBasedReferences.filter(Boolean).slice(0, CITECHECK_MAX_REFERENCES);
+  }
+
+  const authorDateReferences = [];
+  let currentAuthorDateReference = '';
+
+  for (const rawLine of sectionLinesForDebug) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    if (looksLikeAuthorDateReferenceStart(line)) {
+      if (currentAuthorDateReference) authorDateReferences.push(currentAuthorDateReference.trim());
+      currentAuthorDateReference = line;
+    } else if (currentAuthorDateReference) {
+      currentAuthorDateReference += ` ${line}`;
+    }
+  }
+
+  if (currentAuthorDateReference) authorDateReferences.push(currentAuthorDateReference.trim());
+
+  emitDebug('author-date references', authorDateReferences);
+
+  if (authorDateReferences.length > 1) {
+    emitDebug('using author-date extraction');
+    return authorDateReferences.filter(Boolean).slice(0, CITECHECK_MAX_REFERENCES);
   }
 
   const markerRegex = /(?<!\S)(\[(?:\d{1,3})\]|(?:[1-9]\d{0,2})[.)])(?=\s+(?:[A-Za-z"'“]))/g;
@@ -249,7 +280,13 @@ function extractAuthorsCandidate(reference) {
   const cleaned = cleanReferenceForMetadata(reference);
   const year = extractYear(cleaned);
   const beforeYear = year ? cleaned.slice(0, cleaned.indexOf(String(year))).trim() : cleaned.split(/\.\s+/)[0] || '';
-  return beforeYear.replace(/[.,;:\s]+$/g, '').slice(0, 240);
+  let authors = beforeYear
+    .replace(/[\s([{]+$/g, '')
+    .replace(/[,;:\s]+$/g, '');
+  if (!/(?:^|[\s,])[A-Z]\.$/.test(authors)) {
+    authors = authors.replace(/\.+$/g, '');
+  }
+  return authors.slice(0, 240);
 }
 
 function extractVenueCandidate(reference) {
@@ -470,7 +507,12 @@ function scoreCandidateMatch(reference, candidate = {}) {
 }
 
 function getCrossrefYear(work = {}) {
-  const dateSource = work.issued || work['published-print'] || work['published-online'] || work.created;
+  const dateSource = work['published-print']
+    || (work['journal-issue'] && work['journal-issue']['published-print'])
+    || work.issued
+    || work.published
+    || work['published-online']
+    || work.created;
   const dateParts = dateSource && dateSource['date-parts'];
   return Array.isArray(dateParts) && Array.isArray(dateParts[0]) ? dateParts[0][0] : null;
 }

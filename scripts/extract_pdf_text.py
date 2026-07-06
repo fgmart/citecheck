@@ -12,6 +12,7 @@ SECTION_STOP_RE = re.compile(
     re.I,
 )
 INLINE_REFERENCE_START_RE = re.compile(r"(?<!\S)(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])(?=\s+[\w\"'“])")
+YEAR_RE = re.compile(r"\((?:19|20)\d{2}(?:[,;)])")
 
 
 def normalize_text(text):
@@ -134,6 +135,36 @@ def ordered_blocks(page):
     return ordered
 
 
+def ordered_lines(page):
+    lines = []
+    for block in page.get_text("dict").get("blocks", []):
+        for line in block.get("lines", []):
+            text = normalize_text("".join(span.get("text", "") for span in line.get("spans", [])))
+            if not text:
+                continue
+            x0, y0, x1, y1 = line["bbox"]
+            if re.fullmatch(r"\d{1,4}", text):
+                continue
+            if (
+                (y0 < page.rect.height * 0.1 and not REFERENCE_HEADING_RE.match(text))
+                or y0 > page.rect.height * 0.94
+            ):
+                continue
+            lines.append((x0, y0, x1, y1, text))
+    return lines
+
+
+def lines_by_column(lines, page_width):
+    midpoint = page_width / 2
+    left = [line for line in lines if line[0] < midpoint]
+    right = [line for line in lines if line[0] >= midpoint]
+    columns = []
+    for column in (left, right):
+        if column:
+            columns.append(sorted(column, key=lambda line: (line[1], line[0])))
+    return columns
+
+
 def sort_reference_groups(reference_groups):
     reference_groups = merge_continuation_groups(reference_groups)
     numbered = []
@@ -208,6 +239,59 @@ def build_reference_groups(blocks, heading_seen=False):
     return reference_groups
 
 
+def find_reference_heading(doc):
+    for page_index, page in enumerate(doc):
+        for line in ordered_lines(page):
+            if REFERENCE_HEADING_RE.match(line[4]):
+                return page_index, line
+    return None, None
+
+
+def build_unnumbered_reference_groups(doc):
+    heading_page_index, heading_line = find_reference_heading(doc)
+    if heading_page_index is None:
+        return []
+
+    reference_groups = []
+    current_group = []
+
+    for page_index in range(heading_page_index, len(doc)):
+        page = doc[page_index]
+        columns = lines_by_column(ordered_lines(page), page.rect.width)
+
+        for column in columns:
+            if page_index == heading_page_index:
+                heading_x0, heading_y0 = heading_line[0], heading_line[1]
+                same_column = abs(column[0][0] - heading_x0) < page.rect.width * 0.2
+                if not same_column:
+                    continue
+                column = [line for line in column if line[1] > heading_y0 and not REFERENCE_HEADING_RE.match(line[4])]
+
+            if not column:
+                continue
+
+            base_x = min(line[0] for line in column)
+            for line in column:
+                text = repair_line_wrapping(line[4])
+                if not text or REFERENCE_HEADING_RE.match(text):
+                    continue
+
+                is_first_line_indent = line[0] <= base_x + 8
+                if is_first_line_indent and current_group:
+                    reference_groups.append(repair_line_wrapping(" ".join(current_group)))
+                    current_group = [text]
+                else:
+                    current_group.append(text)
+
+    if current_group:
+        reference_groups.append(repair_line_wrapping(" ".join(current_group)))
+
+    return [
+        group for group in reference_groups
+        if YEAR_RE.search(group) and len(group.split()) >= 8
+    ]
+
+
 def infer_marker_style(blocks):
     bracket_count = 0
     numeric_count = 0
@@ -265,12 +349,17 @@ def extract_document_text(pdf_path):
     for page in doc:
         all_blocks.extend(ordered_blocks(page))
 
+    unnumbered_references = False
     document_references = build_reference_groups(all_blocks)
     if len(document_references) < 3:
         document_references = build_reference_groups(all_blocks, heading_seen=True)
+    if len(document_references) < 3:
+        document_references = build_unnumbered_reference_groups(doc)
+        unnumbered_references = True
 
     if document_references:
-        return "\n\n".join(sort_reference_groups(document_references))
+        groups = document_references if unnumbered_references else sort_reference_groups(document_references)
+        return "\n\n".join(groups)
 
     text_parts = []
     for page in doc:

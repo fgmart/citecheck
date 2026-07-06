@@ -27,6 +27,10 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.15 2026-07-06
+- update for unnumbered APA-style pubs
+- prefer ```published-print``` over ```issued``` or ```published-online``` dates to better match citations
+
 ## 2.2.14 2026-07-05
 - click on a result chip at the top and it scrolls to that result
 
