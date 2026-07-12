@@ -1,3 +1,0 @@
-Todo's
-
-Fix cases where it finds a review of the reference rather than the reference itself.
