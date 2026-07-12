@@ -27,6 +27,10 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.16 2026-07-11
+- added parsing of IEEE format
+- created synthetic references in test-header.js regression tests.
+
 ## 2.2.15 2026-07-06
 - update for unnumbered APA-style pubs
 - prefer ```published-print``` over ```issued``` or ```published-online``` dates to better match citations
