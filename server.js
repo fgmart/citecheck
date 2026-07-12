@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.16';
+const ENGINE_VERSION = 'citecheck-v2.2.17';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -491,7 +491,7 @@ function tokenOverlapScore(leftText, rightText) {
 
   const rightSet = new Set(right);
   const overlap = left.filter((token) => rightSet.has(token));
-  return overlap.length / Math.max(1, Math.min(left.length, right.length));
+  return (2 * overlap.length) / Math.max(1, left.length + right.length);
 }
 
 function formatScoreLabel(score) {
@@ -527,6 +527,11 @@ function scoreCandidateMatch(reference, candidate = {}) {
   if (score >= 0.75 && titleScore >= 0.45) confidence = 'high';
   else if (score >= 0.4 && titleScore >= 0.25) confidence = 'medium';
   if (severeYearMismatch && !doiMatched) confidence = 'low';
+
+  const hasMatchedPublicationDetails = volumeMatched || issueMatched || pagesMatched;
+  const hasSupportingIdentityMatch = doiMatched || authorScore > 0 || hasMatchedPublicationDetails;
+  if (confidence === 'high' && !hasSupportingIdentityMatch) confidence = 'medium';
+  if (confidence === 'medium' && !hasSupportingIdentityMatch && titleScore < 0.75) confidence = 'low';
 
   const evidence = [
     `Title overlap: ${formatScoreLabel(titleScore)}`,
@@ -660,6 +665,7 @@ async function fetchJson(url, options = {}) {
       if (response.ok) return response.json();
 
       lastError = new Error(`Remote request failed with status ${response.status}`);
+      lastError.status = response.status;
       if (!isRetriableStatus(response.status) || attempt === retries) break;
     } catch (error) {
       lastError = error;
@@ -709,6 +715,10 @@ function describeLookupError(error) {
   return error && error.message ? error.message : 'unknown error';
 }
 
+function confidenceForLookupError(error) {
+  return error && error.status === 404 ? 'low' : 'medium';
+}
+
 async function analyzeReference(reference) {
   const doi = extractDoi(reference);
   const type = inferReferenceType(reference);
@@ -739,7 +749,7 @@ async function analyzeReference(reference) {
         recommendations.push('The metadata overlap was weak, so this reference should be reviewed manually.');
       }
     } catch (error) {
-      confidence = 'medium';
+      confidence = confidenceForLookupError(error);
       summary = `DOI ${doi} was detected, but the Crossref lookup failed: ${describeLookupError(error)}.`;
       evidence = [`Lookup error: ${describeLookupError(error)}`];
       recommendations = ['Check the DOI manually and confirm the citation fields against the authoritative record.'];
@@ -752,6 +762,7 @@ async function analyzeReference(reference) {
 
       if (best) {
         confidence = best.match.confidence;
+        if (confidence === 'high') confidence = 'medium';
         doiFound = best.doi;
         matchedMetadata = candidateMetadata(best);
         summary = `No DOI was present in the citation. Best Crossref candidate: ${describeCandidate(best)}.`;
@@ -1028,6 +1039,7 @@ module.exports = {
   normalizeDoi,
   mapWithConcurrency,
   describeLookupError,
+  confidenceForLookupError,
   waitForCrossrefSlot,
   extractTitleCandidate,
   extractReferenceMetadata,

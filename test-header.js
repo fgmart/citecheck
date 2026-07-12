@@ -10,6 +10,8 @@ const {
   normalizeDoi,
   mapWithConcurrency,
   describeLookupError,
+  confidenceForLookupError,
+  analyzeReference,
   extractReferenceMetadata
 } = require('./server');
 
@@ -123,7 +125,7 @@ assert.strictEqual(monthIssueMetadata.volume, '34');
 assert.strictEqual(monthIssueMetadata.issue, '09');
 assert.strictEqual(monthIssueMetadata.pages, '13381–13388');
 
-const scoredMatch = scoreCandidateMatch('Smith, J. and Doe, A. Title of a paper. Journal of Testing 2020.', {
+const scoredMatch = scoreCandidateMatch('Smith, J. and Doe, A. 2020. Title of a paper. Journal of Testing.', {
   title: 'Title of a paper',
   containerTitle: 'Journal of Testing',
   authors: 'Smith, Doe',
@@ -145,6 +147,27 @@ assert.ok(publicationDetailMatch.evidence.some((line) => line.includes('Volume m
 assert.ok(publicationDetailMatch.evidence.some((line) => line.includes('Issue matched: 1')));
 assert.ok(publicationDetailMatch.evidence.some((line) => line.includes('Pages matched: 38-43')));
 
+const genericContainedTitleMatch = scoreCandidateMatch('[1] A. Fixture, B. Parser, and C. Harness, “Data, Trees, and Forests – Decision Tree Learning in K–12 Education,” in Proc. 3rd Teaching Machine Learning and Artificial Intelligence Workshop, vol. 207, pp. 37–41, 2023.', {
+  title: 'Decision Trees',
+  containerTitle: 'Machine Learning and Artificial Intelligence',
+  authors: 'Unrelated Author',
+  year: 2023,
+  pages: '73-87',
+  doi: '10.1000/unrelated-decision-trees'
+});
+assert.strictEqual(genericContainedTitleMatch.confidence, 'low');
+assert.ok(genericContainedTitleMatch.score < 0.75);
+
+const expandedContainedTitleMatch = scoreCandidateMatch('[1] A. Fixture, B. Parser, and C. Harness, “Data, Trees, and Forests – Decision Tree Learning in K–12 Education,” in Proc. 3rd Teaching Machine Learning and Artificial Intelligence Workshop, vol. 207, pp. 37–41, 2023.', {
+  title: 'Decision Trees and Random Forests',
+  containerTitle: 'Linear Algebra With Machine Learning and Data',
+  authors: 'Unrelated Author',
+  year: 2023,
+  pages: '209-236',
+  doi: '10.1000/unrelated-random-forests'
+});
+assert.strictEqual(expandedContainedTitleMatch.confidence, 'low');
+
 const mismatchMatch = scoreCandidateMatch('Smith, J. Title of a paper. Journal of Testing 2020.', {
   title: 'Completely unrelated research methods',
   containerTitle: 'Other Journal',
@@ -154,7 +177,7 @@ const mismatchMatch = scoreCandidateMatch('Smith, J. Title of a paper. Journal o
 assert.strictEqual(mismatchMatch.confidence, 'low');
 assert.ok(mismatchMatch.evidence.some((line) => line.includes('Year mismatch')));
 
-const rankedCandidates = rankCandidates('Smith, J. and Doe, A. Title of a paper. Journal of Testing 2020.', [
+const rankedCandidates = rankCandidates('Smith, J. and Doe, A. 2020. Title of a paper. Journal of Testing.', [
   { title: 'Unrelated work', containerTitle: 'Other Journal', authors: 'Someone', year: 2018, doi: '10.1000/nope' },
   { title: 'Title of a paper', containerTitle: 'Journal of Testing', authors: 'Smith, Doe', year: 2020, doi: '10.1000/match' }
 ]);
@@ -227,6 +250,9 @@ assert.strictEqual(responseWithDebug.processedExtractedText, 'processed text');
 
 assert.strictEqual(describeLookupError(new Error('Remote request failed with status 429')), 'Remote request failed with status 429');
 assert.strictEqual(describeLookupError(null), 'unknown error');
+assert.strictEqual(confidenceForLookupError({ status: 404 }), 'low');
+assert.strictEqual(confidenceForLookupError({ status: 429 }), 'medium');
+assert.strictEqual(confidenceForLookupError(new Error('network timeout')), 'medium');
 
 async function runAsyncTests() {
   let active = 0;
@@ -241,6 +267,36 @@ async function runAsyncTests() {
 
   assert.deepStrictEqual(mapped, [2, 4, 6, 8]);
   assert.ok(maxActive <= 2);
+
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      message: {
+        items: [{
+          DOI: '10.1000/missing-source-doi',
+          title: ['A Perfect Synthetic Candidate'],
+          author: [
+            { given: 'Alice', family: 'Fixture' },
+            { given: 'Bob', family: 'Harness' }
+          ],
+          'container-title': ['Journal of Missing DOI Tests'],
+          issued: { 'date-parts': [[2024]] },
+          volume: '12',
+          issue: '3',
+          page: '45-67'
+        }]
+      }
+    })
+  });
+
+  try {
+    const noSourceDoiMatch = await analyzeReference('[4] Alice Fixture and Bob Harness. 2024. A Perfect Synthetic Candidate. Journal of Missing DOI Tests 12, 3 (2024), 45-67.');
+    assert.strictEqual(noSourceDoiMatch.confidence, 'medium');
+    assert.strictEqual(noSourceDoiMatch.doi, '10.1000/missing-source-doi');
+  } finally {
+    global.fetch = originalFetch;
+  }
 }
 
 runAsyncTests()

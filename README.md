@@ -27,6 +27,12 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.17 2026-07-11
+- tightened Crossref confidence ratings for no-DOI candidate matches.
+- no-DOI citations are now capped at MEDIUM even when Crossref finds a strong candidate DOI
+- report missing DOI records from Crossref as LOW confidence.
+- refined token overlap scoring to avoid overrating short/generic title matches and added synthetic regression coverage for these cases.
+
 ## 2.2.16 2026-07-11
 - added parsing of IEEE format
 - created synthetic references in test-header.js regression tests.
