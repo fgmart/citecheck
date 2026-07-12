@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.15';
+const ENGINE_VERSION = 'citecheck-v2.2.16';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -240,8 +240,27 @@ function extractDoi(reference) {
   return match ? normalizeDoi(match[0]) : null;
 }
 
+function stripReferenceMarker(reference) {
+  return reference.replace(/^(\[\d+\]|\d+[.)])\s*/, '').trim();
+}
+
+function findQuotedTitle(reference) {
+  const withoutMarker = stripReferenceMarker(reference);
+  const match = withoutMarker.match(/[“"]([^”"]{3,})[”"]/);
+  if (!match) return null;
+  return {
+    title: normalizeText(match[1]).replace(/[,;:\s]+$/g, ''),
+    start: match.index,
+    end: match.index + match[0].length,
+    source: withoutMarker
+  };
+}
+
 function extractTitleCandidate(reference) {
-  const withoutNumbers = reference.replace(/^(\[\d+\]|\d+[.)]\s*)/, '').trim();
+  const quotedTitle = findQuotedTitle(reference);
+  if (quotedTitle) return quotedTitle.title;
+
+  const withoutNumbers = stripReferenceMarker(reference);
   const withoutDoi = withoutNumbers.replace(/10\.\d{4,9}\/[\-._;()/:A-Z0-9]+/gi, '').trim();
   const withoutUrl = withoutDoi.replace(/https?:\/\/\S+/gi, '').trim();
   const year = extractYear(withoutUrl);
@@ -267,7 +286,7 @@ function extractYear(reference) {
 
 function cleanReferenceForMetadata(reference) {
   return reference
-    .replace(/^(\[\d+\]|\d+[.)]\s*)/, '')
+    .replace(/^(\[\d+\]|\d+[.)])\s*/, '')
     .replace(/\barXiv:\S+/gi, '')
     .replace(/\bdoi:\s*10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi, '')
     .replace(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi, '')
@@ -278,6 +297,14 @@ function cleanReferenceForMetadata(reference) {
 
 function extractAuthorsCandidate(reference) {
   const cleaned = cleanReferenceForMetadata(reference);
+  const quotedTitle = findQuotedTitle(cleaned);
+  if (quotedTitle) {
+    return quotedTitle.source
+      .slice(0, quotedTitle.start)
+      .replace(/[,;:\s]+$/g, '')
+      .slice(0, 240);
+  }
+
   const year = extractYear(cleaned);
   const beforeYear = year ? cleaned.slice(0, cleaned.indexOf(String(year))).trim() : cleaned.split(/\.\s+/)[0] || '';
   let authors = beforeYear
@@ -314,7 +341,47 @@ function extractTrailingPageRange(text) {
   return matches[matches.length - 1][1].trim();
 }
 
+function extractIeeePublicationDetails(reference) {
+  const cleaned = cleanReferenceForMetadata(reference);
+  const quotedTitle = findQuotedTitle(cleaned);
+  if (!quotedTitle) return null;
+
+  let details = quotedTitle.source
+    .slice(quotedTitle.end)
+    .replace(/^[,\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!details) {
+    return { venue: '', volume: '', issue: '', pages: '' };
+  }
+
+  details = details.replace(/[.;\s]+$/g, '');
+  const volumeMatch = details.match(/\bvol\.\s*([A-Za-z0-9-]+)/i);
+  const issueMatch = details.match(/\bno\.\s*([A-Za-z0-9-]+)/i);
+  const pagesMatch = details.match(/\bpp?\.\s*([^,.;]+)/i);
+  const year = extractYear(details);
+
+  let venue = details
+    .replace(/\bvol\.\s*[A-Za-z0-9-]+.*$/i, '')
+    .replace(/\bpp?\.\s*[^,.;]+.*$/i, '')
+    .replace(year ? new RegExp(`,?\\s*${year}\\b.*$`) : /$/, '')
+    .replace(/^[,\s]+/, '')
+    .replace(/[,;\s]+$/g, '')
+    .replace(/^\s*in\s+/i, '')
+    .trim();
+
+  return {
+    venue,
+    volume: volumeMatch ? volumeMatch[1].trim() : '',
+    issue: issueMatch ? issueMatch[1].trim() : '',
+    pages: pagesMatch ? pagesMatch[1].trim() : extractTrailingPageRange(details)
+  };
+}
+
 function extractPublicationDetails(reference) {
+  const ieeeDetails = extractIeeePublicationDetails(reference);
+  if (ieeeDetails) return ieeeDetails;
+
   const cleaned = cleanReferenceForMetadata(reference);
   const title = extractTitleCandidate(reference);
   let afterTitle = cleaned;
