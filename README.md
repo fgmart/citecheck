@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.18 2026-07-12
+- improved ability to find references section - works on right column now
+
 ## 2.2.17 2026-07-11
 - tightened Crossref confidence ratings for no-DOI candidate matches.
 - no-DOI citations are now capped at MEDIUM even when Crossref finds a strong candidate DOI

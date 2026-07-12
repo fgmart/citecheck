@@ -122,11 +122,12 @@ def ordered_blocks(page):
 
     reference_heading = next((block for block in blocks if REFERENCE_HEADING_RE.match(block[4])), None)
     if reference_heading and reference_heading[0] > page.rect.width * 0.35:
-        heading_x0, heading_y0 = reference_heading[0], reference_heading[1]
+        heading_y0 = reference_heading[1]
         margin = 24
+        right_column_x0 = page.rect.width / 2 - margin
         blocks = [
             block for block in blocks
-            if block[1] < heading_y0 or block[0] >= heading_x0 - margin
+            if block[1] < heading_y0 or block[0] >= right_column_x0
         ]
 
     ordered = []
