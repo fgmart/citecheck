@@ -4,6 +4,7 @@ analyze.ndjson
 uploads/
 .vscode/settings.json
 scripts/test_extract_pdf_text.py
+scripts/__pycache__/
 start-server.local.sh
 test-sample.js
 package.json
