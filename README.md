@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.20 2026-07-12
+- improved IEEE conference venue parsing for names containing a year and removed trailing conference locations
+
 ## 2.2.19 2026-07-12
 - added a drag-and-drop PDF upload area that also opens the file picker when clicked (bss suggestion)
 

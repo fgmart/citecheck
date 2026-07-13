@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.19';
+const ENGINE_VERSION = 'citecheck-v2.2.20';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -359,16 +359,22 @@ function extractIeeePublicationDetails(reference) {
   const volumeMatch = details.match(/\bvol\.\s*([A-Za-z0-9-]+)/i);
   const issueMatch = details.match(/\bno\.\s*([A-Za-z0-9-]+)/i);
   const pagesMatch = details.match(/\bpp?\.\s*([^,.;]+)/i);
-  const year = extractYear(details);
+  const trailingYearMatch = details.match(/(?:^|,\s*)((?:19|20)\d{2})[.;\s]*$/);
 
   let venue = details
     .replace(/\bvol\.\s*[A-Za-z0-9-]+.*$/i, '')
     .replace(/\bpp?\.\s*[^,.;]+.*$/i, '')
-    .replace(year ? new RegExp(`,?\\s*${year}\\b.*$`) : /$/, '')
+    .replace(trailingYearMatch ? new RegExp(`,?\\s*${trailingYearMatch[1]}[.;\\s]*$`) : /$/, '')
     .replace(/^[,\s]+/, '')
     .replace(/[,;\s]+$/g, '')
     .replace(/^\s*in\s+/i, '')
     .trim();
+
+  // IEEE conference citations commonly put a parenthesized acronym after the
+  // venue and the conference location after that. Keep the acronym, but do not
+  // report the city/country fields as part of the publication venue.
+  const conferenceVenue = venue.match(/^(.+\([^)]*\))(?:,\s*.+)$/);
+  if (conferenceVenue) venue = conferenceVenue[1].trim();
 
   return {
     venue,

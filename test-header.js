@@ -87,6 +87,15 @@ assert.strictEqual(ieeeProceedingsMetadata.title, 'Using synthetic records for t
 assert.strictEqual(ieeeProceedingsMetadata.venue, 'Proc. 21st Example Conf. on Document Testing');
 assert.strictEqual(ieeeProceedingsMetadata.pages, '1–3');
 
+const yearLeadingConferenceMetadata = extractReferenceMetadata('[1] D. Fixture and B. Example, "Testing Venue Names That Contain Years," in Proceedings of the 2020 Conference on Synthetic Parser Systems (SPS \'20), Example City, TS, USA, 2020.');
+assert.strictEqual(yearLeadingConferenceMetadata.venue, 'Proceedings of the 2020 Conference on Synthetic Parser Systems (SPS \'20)');
+
+const symposiumWithLocationMetadata = extractReferenceMetadata('[3] R. Sample, H. W. Pattern, L. Mock and C. Harness, "Designing Synthetic Citations for Parser Regression Tests," in Proceedings of the Ninth Symposium on Fixture-Based Metadata Evaluation (FBME-19), Example City, TS, USA, 2019.');
+assert.strictEqual(symposiumWithLocationMetadata.venue, 'Proceedings of the Ninth Symposium on Fixture-Based Metadata Evaluation (FBME-19)');
+
+const yearLeadingWorkshopMetadata = extractReferenceMetadata('[4] S. Tester, T. Placeholder, S. Runner and R. Checker, "It’s a Fixture After All – Parsing Structured Test Records," in 2019 Example Blocks and Boundaries Workshop (EB&B), Sampleton, TS, USA, 2019.');
+assert.strictEqual(yearLeadingWorkshopMetadata.venue, '2019 Example Blocks and Boundaries Workshop (EB&B)');
+
 const ieeeJournalMetadata = extractReferenceMetadata('[3] Y. Example, S. Fixture, and R. Parser, “Teaching and Learning to Construct Data-Based Fixtures Using Sample Cards as the First Introduction to Parser Testing,” Journal of Synthetic Evaluation, vol. 23, no. 1, 2024, doi: 10.1000/jse.v23i1.450.');
 assert.strictEqual(ieeeJournalMetadata.authors, 'Y. Example, S. Fixture, and R. Parser');
 assert.strictEqual(ieeeJournalMetadata.date, '2024');
