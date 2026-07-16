@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.20';
+const ENGINE_VERSION = 'citecheck-v2.2.21';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -914,6 +914,8 @@ function writeAnalyzeEvent(res, event, data = {}) {
 }
 
 async function handleAnalyze(req, res) {
+  let tempPath = null;
+
   try {
     const body = await readRequestBody(req);
     const contentType = req.headers['content-type'] || '';
@@ -937,7 +939,7 @@ async function handleAnalyze(req, res) {
 
     const disposition = pdfPart.headerText.match(/filename="([^"]+)"/i);
     const fileName = disposition ? disposition[1] : 'upload.pdf';
-    const tempPath = path.join(uploadsDir, `${Date.now()}-${fileName}`);
+    tempPath = path.join(uploadsDir, `${Date.now()}-${fileName}`);
     fs.writeFileSync(tempPath, pdfPart.contentBuffer);
 
     const extracted = extractPdfText(tempPath);
@@ -965,8 +967,6 @@ async function handleAnalyze(req, res) {
       });
     }
 
-    fs.unlinkSync(tempPath);
-
     writeAnalyzeEvent(res, 'complete', {
       result: buildAnalyzeResponse({
       filename: fileName,
@@ -986,6 +986,16 @@ async function handleAnalyze(req, res) {
     } else {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
+    }
+  } finally {
+    if (tempPath) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (cleanupError) {
+        if (cleanupError.code !== 'ENOENT') {
+          console.error(`Failed to delete temporary upload ${tempPath}:`, cleanupError);
+        }
+      }
     }
   }
 }

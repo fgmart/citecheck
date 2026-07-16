@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.21 2026-07-16
+- ensure uploaded PDFs are deleted after processing even when analysis fails
+
 ## 2.2.20 2026-07-12
 - improved IEEE conference venue parsing for names containing a year and removed trailing conference locations
 

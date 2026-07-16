@@ -2,7 +2,7 @@
 examples/
 analyze.ndjson
 uploads/
-.vscode/settings.json
+.vscode/
 scripts/test_extract_pdf_text.py
 scripts/__pycache__/
 start-server.local.sh
