@@ -42,6 +42,10 @@ def reference_number(text):
 
 
 def repair_line_wrapping(text):
+    # PDF line extraction can insert whitespace at any visual line break. Repair
+    # unambiguous DOI boundaries before applying the more general suffix repair.
+    text = re.sub(r"(\b(?:doi:\s*|https?://doi\.org/)?10\.)\s+(?=\d{4,9}/)", r"\1", text, flags=re.I)
+    text = re.sub(r"(\b10\.\d{4,9}/)\s+(?=[-._;()/:A-Z0-9])", r"\1", text, flags=re.I)
     text = re.sub(r"(doi:\s*10\.\d{4,9}/\S+)\s+([A-Za-z0-9])", r"\1\2", text, flags=re.I)
     text = re.sub(r"(10\.\d{4,9}/\S*[-./])\s+([A-Za-z0-9])", r"\1\2", text, flags=re.I)
 

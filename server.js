@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.21';
+const ENGINE_VERSION = 'citecheck-v2.2.22';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -39,6 +39,13 @@ function cleanExtractedText(text) {
     .replace(/\n{2,}/g, '\n')
     .replace(/[ \t]+/g, ' ')
     .trim();
+}
+
+function repairDoiWrapping(text) {
+  return text
+    .replace(/(\b(?:doi:\s*|https?:\/\/doi\.org\/)?10\.)\s+(?=\d{4,9}\/)/gi, '$1')
+    .replace(/(\b10\.\d{4,9}\/)[\s]+(?=[-._;()/:A-Z0-9])/gi, '$1')
+    .replace(/(\b10\.\d{4,9}\/[-._;()/:A-Z0-9]*[-._;()/:])\s+(?=[-._;()/:A-Z0-9])/gi, '$1');
 }
 
 function stripPageHeaders(text) {
@@ -95,7 +102,7 @@ function extractReferencesFromText(text, debugSink = null) {
   const lines = text.split(/\r?\n/);
   const referenceHeadingIndex = lines.findIndex((line) => /^references$|^bibliography$/i.test(line.trim()));
   const sectionLines = referenceHeadingIndex >= 0 ? lines.slice(referenceHeadingIndex + 1) : lines;
-  const sectionText = sectionLines.join('\n').trim();
+  const sectionText = repairDoiWrapping(sectionLines.join('\n').trim());
 
   const emitDebug = (message, detail) => {
     debugLog(message, detail);
@@ -236,7 +243,7 @@ function normalizeDoi(doi) {
 }
 
 function extractDoi(reference) {
-  const match = reference.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
+  const match = repairDoiWrapping(reference).match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
   return match ? normalizeDoi(match[0]) : null;
 }
 
@@ -1059,5 +1066,6 @@ module.exports = {
   waitForCrossrefSlot,
   extractTitleCandidate,
   extractReferenceMetadata,
-  extractYear
+  extractYear,
+  repairDoiWrapping
 };

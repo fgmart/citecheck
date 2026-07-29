@@ -12,7 +12,8 @@ const {
   describeLookupError,
   confidenceForLookupError,
   analyzeReference,
-  extractReferenceMetadata
+  extractReferenceMetadata,
+  repairDoiWrapping
 } = require('./server');
 
 const sample = `
@@ -47,6 +48,20 @@ const doiRefs = extractReferencesFromText(doiSample);
 assert.strictEqual(doiRefs.length, 2);
 assert.ok(doiRefs[0].includes('doi:10.1000/abcd1234'));
 assert.ok(doiRefs[1].includes('[2]'));
+
+const wrappedDoiSample = `References
+[10] Avery Fixture. 2024. A DOI split after punctuation. Journal of Synthetic Records 3, 1, 10–20. doi:10.1000/example.
+10001
+[11] Blair Sample. 2025. A DOI split inside its registrant prefix. Journal of Synthetic Records 4, 2, 21–30. doi:10.
+1000/example.10002
+[12] Casey Harness. 2026. A DOI split immediately after its slash. Journal of Synthetic Records 5, 3, 31–40. https://doi.org/10.1000/
+example.10003`;
+const wrappedDoiRefs = extractReferencesFromText(wrappedDoiSample);
+assert.strictEqual(wrappedDoiRefs.length, 3);
+assert.ok(wrappedDoiRefs[0].includes('doi:10.1000/example.10001'));
+assert.ok(wrappedDoiRefs[1].includes('doi:10.1000/example.10002'));
+assert.ok(wrappedDoiRefs[2].includes('https://doi.org/10.1000/example.10003'));
+assert.strictEqual(repairDoiWrapping('doi:10. 1000/example.10002'), 'doi:10.1000/example.10002');
 
 const inlineMarkerSample = `References\n[1] Author A, Author B. Title one. Journal 2020.\nThis is still part of the same reference.\n[2] Author C, Author D. Title two. Journal 2021.`;
 const inlineMarkerRefs = extractReferencesFromText(inlineMarkerSample);

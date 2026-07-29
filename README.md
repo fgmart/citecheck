@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.22 2026-07-29
+- repaired DOI extraction when PDF line wrapping splits the registrant prefix, slash, or punctuated suffix
+
 ## 2.2.21 2026-07-16
 - ensure uploaded PDFs are deleted after processing even when analysis fails
 
