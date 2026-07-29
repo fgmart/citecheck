@@ -27,6 +27,12 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.24 2026-07-29
+- recognize modern arXiv identifiers and expose their canonical `10.48550/arXiv.*` DOI
+
+## 2.2.23 2026-07-29
+- fixed title and abbreviated journal venue extraction for citations with two-word titles
+
 ## 2.2.22 2026-07-29
 - repaired DOI extraction when PDF line wrapping splits the registrant prefix, slash, or punctuated suffix
 

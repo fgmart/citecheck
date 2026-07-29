@@ -13,6 +13,7 @@ const {
   confidenceForLookupError,
   analyzeReference,
   extractReferenceMetadata,
+  extractDoi,
   repairDoiWrapping
 } = require('./server');
 
@@ -62,6 +63,10 @@ assert.ok(wrappedDoiRefs[0].includes('doi:10.1000/example.10001'));
 assert.ok(wrappedDoiRefs[1].includes('doi:10.1000/example.10002'));
 assert.ok(wrappedDoiRefs[2].includes('https://doi.org/10.1000/example.10003'));
 assert.strictEqual(repairDoiWrapping('doi:10. 1000/example.10002'), 'doi:10.1000/example.10002');
+assert.strictEqual(
+  extractDoi('[4] Jordan Fixture. 2026. A Synthetic Preprint. arXiv:2601.12345v2 [cs.EX] https://arxiv.org/abs/2601.12345'),
+  '10.48550/arxiv.2601.12345'
+);
 
 const inlineMarkerSample = `References\n[1] Author A, Author B. Title one. Journal 2020.\nThis is still part of the same reference.\n[2] Author C, Author D. Title two. Journal 2021.`;
 const inlineMarkerRefs = extractReferencesFromText(inlineMarkerSample);
@@ -94,6 +99,13 @@ assert.strictEqual(extractedMetadata.authors, 'Morgan Tester and Riley Example')
 assert.strictEqual(extractedMetadata.date, '2025');
 assert.strictEqual(extractedMetadata.title, 'Calibrating Widget Classifiers in the Age of Synthetic Data');
 assert.ok(extractedMetadata.venue.includes('ACM Trans'));
+
+const twoWordTitleMetadata = extractReferenceMetadata('[20] Jordan Fixture. 2006. Algorithmic Reasoning. Commun. Fixtures 49, 3 (2006), 33–35. doi:10.1000/fixture.2006.20');
+assert.strictEqual(twoWordTitleMetadata.title, 'Algorithmic Reasoning');
+assert.strictEqual(twoWordTitleMetadata.venue, 'Commun. Fixtures');
+assert.strictEqual(twoWordTitleMetadata.volume, '49');
+assert.strictEqual(twoWordTitleMetadata.issue, '3');
+assert.strictEqual(twoWordTitleMetadata.pages, '33–35');
 
 const ieeeProceedingsMetadata = extractReferenceMetadata('[2] A. Fixture, B. Parser, C. Harness, D. Runner, and E. Example, “Using synthetic records for testing citation parsers,” in Proc. 21st Example Conf. on Document Testing, pp. 1–3, 2021, doi: 10.1000/ieee.fixture.2021.002.');
 assert.strictEqual(ieeeProceedingsMetadata.authors, 'A. Fixture, B. Parser, C. Harness, D. Runner, and E. Example');
@@ -291,6 +303,11 @@ async function runAsyncTests() {
 
   assert.deepStrictEqual(mapped, [2, 4, 6, 8]);
   assert.ok(maxActive <= 2);
+
+  const arxivMatch = await analyzeReference('[4] Jordan Fixture. 2026. A Synthetic Preprint. arXiv:2601.12345 [cs.EX] https://arxiv.org/abs/2601.12345');
+  assert.strictEqual(arxivMatch.doi, '10.48550/arxiv.2601.12345');
+  assert.strictEqual(arxivMatch.confidence, 'medium');
+  assert.ok(arxivMatch.summary.includes('normalized to canonical DOI'));
 
   const originalFetch = global.fetch;
   global.fetch = async () => ({

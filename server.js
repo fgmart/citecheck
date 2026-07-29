@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.22';
+const ENGINE_VERSION = 'citecheck-v2.2.24';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -243,8 +243,13 @@ function normalizeDoi(doi) {
 }
 
 function extractDoi(reference) {
-  const match = repairDoiWrapping(reference).match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
-  return match ? normalizeDoi(match[0]) : null;
+  const repairedReference = repairDoiWrapping(reference);
+  const match = repairedReference.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
+  if (match) return normalizeDoi(match[0]);
+
+  const arxivMatch = repairedReference.match(/\barxiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?\b/i)
+    || repairedReference.match(/\barxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?\b/i);
+  return arxivMatch ? normalizeDoi(`10.48550/arXiv.${arxivMatch[1]}`) : null;
 }
 
 function stripReferenceMarker(reference) {
@@ -280,7 +285,7 @@ function extractTitleCandidate(reference) {
     .filter(Boolean);
   const titleCandidate = segments.find((segment) => {
     const words = segment.split(/\s+/).filter(Boolean);
-    return words.length >= 3 && !/[;]/.test(segment) && !/(journal|proc|transactions|conference|press|springer|ieee|acm|arxiv|doi|https?)/i.test(segment);
+    return words.length >= 2 && !/[;]/.test(segment) && !/(journal|proc|transactions|conference|press|springer|ieee|acm|arxiv|doi|https?)/i.test(segment);
   });
 
   return titleCandidate || titleSource.replace(/^[.\s]+/, '').slice(0, 160);
@@ -735,6 +740,7 @@ function confidenceForLookupError(error) {
 async function analyzeReference(reference) {
   const doi = extractDoi(reference);
   const type = inferReferenceType(reference);
+  const isCanonicalArxivDoi = type === 'arxiv' && doi && doi.startsWith('10.48550/arxiv.');
   const extractedMetadata = extractReferenceMetadata(reference);
   let confidence = 'low';
   let summary = 'No DOI detected. Best-effort verification will rely on author/title/journal matching.';
@@ -743,7 +749,13 @@ async function analyzeReference(reference) {
   let doiFound = null;
   let matchedMetadata = candidateMetadata();
 
-  if (doi) {
+  if (isCanonicalArxivDoi) {
+    confidence = 'medium';
+    doiFound = doi;
+    summary = `arXiv identifier detected and normalized to canonical DOI ${doi}.`;
+    evidence = ['Canonical DOI derived from the cited arXiv identifier'];
+    recommendations = ['Confirm that the arXiv title, author list, and version match the intended source.'];
+  } else if (doi) {
     try {
       const candidate = await fetchCrossrefWorkByDoi(doi);
       const match = scoreCandidateMatch(reference, candidate);
@@ -1067,5 +1079,6 @@ module.exports = {
   extractTitleCandidate,
   extractReferenceMetadata,
   extractYear,
+  extractDoi,
   repairDoiWrapping
 };
