@@ -7,7 +7,7 @@ Citecheck is a web app for reviewing academic references in a PDF paper.
 - Extracts text from the paper
 - Finds the references or bibliography section
 - Detects DOIs when present
-- Queries Crossref for metadata and provides a confidence-based summary
+- Queries Crossref and arXiv for metadata and provides a confidence-based summary
 - Presents each citation with a concise review and recommendations
 
 ## Run locally
@@ -19,13 +19,27 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-2. Add your email address to ```start-server.sh``` to be friendly to Crossref (the service we use to validate citations)
+2. Install the Node dependency used to parse arXiv API responses:
 
-1. Run ```start-server.sh``` .
+```
+npm install
+```
 
-1. Open http://localhost:3000 in your browser.
+3. Add your email address to ```start-server.sh``` to be friendly to Crossref.
+
+4. Run ```start-server.sh``` .
+
+5. Open http://localhost:3000 in your browser.
+
+Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv identifiers are verified directly with arXiv; when Crossref has no viable match for an identifier-free citation, Citecheck also tries an arXiv title search. Thank you to arXiv for use of its open access interoperability.
 
 # Version History
+
+## 3.0 2026-08-01
+- verify explicit arXiv identifiers against the arXiv API and batch identifiers from the same paper
+- fall back to arXiv title search when Crossref returns no viable match
+- add source-aware confidence evidence, arXiv rate limiting and caching, and user-facing API disclosure
+- switch future release labels to major and minor version numbers
 
 ## 2.2.28 2026-08-01
 - distinguish quoted phrases inside titles from fully quoted IEEE-style titles

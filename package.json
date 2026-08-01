@@ -1,0 +1,12 @@
+{
+  "name": "citecheck",
+  "private": true,
+  "description": "Local-first academic reference checker",
+  "scripts": {
+    "test": "node --test test-header.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.2.5"
+  }
+}

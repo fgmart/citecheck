@@ -2,18 +2,31 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.28';
+const ENGINE_VERSION = 'citecheck-v3.0';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
 const CROSSREF_RETRIES = Number(process.env.CROSSREF_RETRIES || 4);
 const CROSSREF_MIN_INTERVAL_MS = Number(process.env.CROSSREF_MIN_INTERVAL_MS || 1500);
 const CITECHECK_MAX_REFERENCES = Number(process.env.CITECHECK_MAX_REFERENCES || 100);
+const ARXIV_RETRIES = Number(process.env.ARXIV_RETRIES || 3);
+const ARXIV_MIN_INTERVAL_MS = Number(process.env.ARXIV_MIN_INTERVAL_MS || 3000);
+const ARXIV_CACHE_TTL_MS = Number(process.env.ARXIV_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
+const ARXIV_CACHE_MAX_ENTRIES = Number(process.env.ARXIV_CACHE_MAX_ENTRIES || 500);
 const REFERENCE_HEADING_RE = /^(?:(?:acknowledgments?|acknowledgements?)\s+)?(?:references|bibliography)$/i;
 let nextCrossrefRequestAt = 0;
+let nextArxivRequestAt = 0;
+let arxivRequestQueue = Promise.resolve();
+const arxivCache = new Map();
+const arxivXmlParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  trimValues: true
+});
 fs.mkdirSync(uploadsDir, { recursive: true });
 
 function debugLog(message, detail) {
@@ -233,8 +246,8 @@ function extractReferencesFromText(text, debugSink = null) {
 
 function inferReferenceType(reference) {
   const lower = reference.toLowerCase();
-  if (lower.includes('doi:') || lower.includes('https://doi.org/')) return 'doi';
   if (lower.includes('arxiv')) return 'arxiv';
+  if (lower.includes('doi:') || lower.includes('https://doi.org/')) return 'doi';
   if (lower.includes('journal') || lower.includes('proc') || lower.includes('transactions')) return 'article';
   return 'unknown';
 }
@@ -243,14 +256,34 @@ function normalizeDoi(doi) {
   return doi ? doi.replace(/[.,;:]+$/g, '').toLowerCase() : null;
 }
 
+function extractArxivIdentifier(reference) {
+  const repairedReference = repairDoiWrapping(reference);
+  const modernMatch = repairedReference.match(/\barxiv:\s*(\d{4}\.\d{4,5})(v\d+)?\b/i)
+    || repairedReference.match(/\barxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(v\d+)?\b/i)
+    || repairedReference.match(/\b10\.48550\/arxiv\.(\d{4}\.\d{4,5})(v\d+)?\b/i);
+  const legacyMatch = repairedReference.match(/\barxiv:\s*([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?\b/i)
+    || repairedReference.match(/\barxiv\.org\/(?:abs|pdf)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?\b/i)
+    || repairedReference.match(/\b10\.48550\/arxiv\.([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(v\d+)?\b/i);
+  const match = modernMatch || legacyMatch;
+  if (!match) return null;
+
+  const baseId = match[1];
+  const version = match[2] || '';
+  return {
+    baseId,
+    version,
+    requestedId: `${baseId}${version}`,
+    canonicalDoi: normalizeDoi(`10.48550/arXiv.${baseId}`)
+  };
+}
+
 function extractDoi(reference) {
   const repairedReference = repairDoiWrapping(reference);
   const match = repairedReference.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
   if (match) return normalizeDoi(match[0]);
 
-  const arxivMatch = repairedReference.match(/\barxiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?\b/i)
-    || repairedReference.match(/\barxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v\d+)?\b/i);
-  return arxivMatch ? normalizeDoi(`10.48550/arXiv.${arxivMatch[1]}`) : null;
+  const arxivIdentifier = extractArxivIdentifier(repairedReference);
+  return arxivIdentifier ? arxivIdentifier.canonicalDoi : null;
 }
 
 function stripReferenceMarker(reference) {
@@ -641,6 +674,82 @@ function normalizeCrossrefWork(work = {}) {
   };
 }
 
+function asArray(value) {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function xmlText(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string' || typeof value === 'number') return normalizeText(String(value));
+  return normalizeText(String(value['#text'] || ''));
+}
+
+function parseArxivEntryId(value) {
+  const rawId = xmlText(value).replace(/^https?:\/\/arxiv\.org\/abs\//i, '');
+  const match = rawId.match(/^(.+?)(v\d+)?$/i);
+  return {
+    baseId: match ? match[1] : rawId,
+    version: match && match[2] ? match[2] : ''
+  };
+}
+
+function normalizeArxivEntry(entry = {}) {
+  const identifier = parseArxivEntryId(entry.id);
+  if (!identifier.baseId) return null;
+
+  const authors = asArray(entry.author)
+    .map((author) => xmlText(author && author.name))
+    .filter(Boolean)
+    .join(', ');
+  const categories = asArray(entry.category)
+    .map((category) => category && category['@_term'])
+    .filter(Boolean);
+  const primaryCategory = entry['arxiv:primary_category'] && entry['arxiv:primary_category']['@_term']
+    ? entry['arxiv:primary_category']['@_term']
+    : categories[0] || '';
+  const links = asArray(entry.link);
+  const abstractLink = links.find((link) => link && link['@_rel'] === 'alternate');
+  const published = xmlText(entry.published);
+  const publicationDoi = normalizeDoi(xmlText(entry['arxiv:doi']));
+
+  return {
+    source: 'arxiv',
+    doi: normalizeDoi(`10.48550/arXiv.${identifier.baseId}`),
+    title: xmlText(entry.title),
+    authors,
+    containerTitle: 'arXiv',
+    year: /^\d{4}/.test(published) ? Number(published.slice(0, 4)) : null,
+    volume: '',
+    issue: '',
+    pages: '',
+    publisher: '',
+    url: abstractLink && abstractLink['@_href'] ? abstractLink['@_href'] : `https://arxiv.org/abs/${identifier.baseId}${identifier.version}`,
+    arxivId: identifier.baseId,
+    arxivVersion: identifier.version,
+    primaryCategory,
+    categories,
+    published,
+    updated: xmlText(entry.updated),
+    journalReference: xmlText(entry['arxiv:journal_ref']),
+    publicationDoi
+  };
+}
+
+function parseArxivFeed(xml) {
+  const parsed = arxivXmlParser.parse(xml);
+  const entries = parsed && parsed.feed ? asArray(parsed.feed.entry) : [];
+  return entries.map(normalizeArxivEntry).filter(Boolean);
+}
+
+function buildArxivUrl(params = {}) {
+  const url = new URL('https://export.arxiv.org/api/query');
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+  });
+  return url.toString();
+}
+
 function buildCrossrefUrl(pathname, params = {}) {
   const url = new URL(`https://api.crossref.org${pathname}`);
   Object.entries(params).forEach(([key, value]) => {
@@ -704,6 +813,125 @@ async function fetchJson(url, options = {}) {
   throw lastError || new Error('Remote request failed');
 }
 
+async function waitForArxivSlot(now = Date.now()) {
+  const scheduledAt = Math.max(now, nextArxivRequestAt);
+  nextArxivRequestAt = scheduledAt + ARXIV_MIN_INTERVAL_MS;
+  const delay = scheduledAt - now;
+  if (delay > 0) await sleep(delay);
+}
+
+function scheduleArxivRequest(task) {
+  const scheduled = arxivRequestQueue.then(task, task);
+  arxivRequestQueue = scheduled.catch(() => {});
+  return scheduled;
+}
+
+async function fetchArxivText(url, options = {}) {
+  const retries = options.retries ?? ARXIV_RETRIES;
+  return scheduleArxivRequest(async () => {
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      let response = null;
+      try {
+        await waitForArxivSlot();
+        response = await fetch(url, {
+          headers: {
+            'User-Agent': `${ENGINE_VERSION}${CROSSREF_MAILTO ? ` (mailto:${CROSSREF_MAILTO})` : ''}`
+          }
+        });
+        if (response.ok) return response.text();
+
+        lastError = new Error(`arXiv request failed with status ${response.status}`);
+        lastError.status = response.status;
+        if (!isRetriableStatus(response.status) || attempt === retries) break;
+      } catch (error) {
+        lastError = error;
+        if (attempt === retries) break;
+      }
+
+      await sleep(getRetryDelay(attempt, response));
+    }
+
+    throw lastError || new Error('arXiv request failed');
+  });
+}
+
+function getArxivCache(key, now = Date.now()) {
+  const cached = arxivCache.get(key);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= now) {
+    arxivCache.delete(key);
+    return undefined;
+  }
+  return cached.value;
+}
+
+function setArxivCache(key, value, now = Date.now()) {
+  if (arxivCache.has(key)) arxivCache.delete(key);
+  arxivCache.set(key, { value, expiresAt: now + ARXIV_CACHE_TTL_MS });
+  while (arxivCache.size > ARXIV_CACHE_MAX_ENTRIES) {
+    arxivCache.delete(arxivCache.keys().next().value);
+  }
+}
+
+async function fetchArxivEntriesByIds(identifiers = []) {
+  const requested = Array.from(new Set(identifiers.map((identifier) => {
+    if (typeof identifier === 'string') return identifier;
+    return identifier && identifier.requestedId;
+  }).filter(Boolean)));
+  const results = new Map();
+  const uncached = [];
+
+  for (const requestedId of requested) {
+    const cacheKey = `id:${requestedId.toLowerCase()}`;
+    const cached = getArxivCache(cacheKey);
+    if (cached !== undefined) {
+      results.set(requestedId.toLowerCase(), cached);
+    } else {
+      uncached.push(requestedId);
+    }
+  }
+
+  if (uncached.length) {
+    const xml = await fetchArxivText(buildArxivUrl({
+      id_list: uncached.join(','),
+      max_results: uncached.length
+    }));
+    const entries = parseArxivFeed(xml);
+
+    for (const requestedId of uncached) {
+      const requestedBase = requestedId.replace(/v\d+$/i, '').toLowerCase();
+      const candidate = entries.find((entry) => entry.arxivId.toLowerCase() === requestedBase) || null;
+      const cacheKey = `id:${requestedId.toLowerCase()}`;
+      setArxivCache(cacheKey, candidate);
+      results.set(requestedId.toLowerCase(), candidate);
+    }
+  }
+
+  return results;
+}
+
+async function searchArxivCandidates(reference, maxResults = 5) {
+  const title = extractTitleCandidate(reference);
+  if (!title) return [];
+  const normalizedTitle = normalizeText(title).replace(/["“”]/g, ' ');
+  const cacheKey = `title:${normalizedTitle.toLowerCase()}:${maxResults}`;
+  const cached = getArxivCache(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const xml = await fetchArxivText(buildArxivUrl({
+    search_query: `ti:"${normalizedTitle}"`,
+    start: 0,
+    max_results: maxResults,
+    sortBy: 'relevance',
+    sortOrder: 'descending'
+  }));
+  const candidates = parseArxivFeed(xml);
+  setArxivCache(cacheKey, candidates);
+  return candidates;
+}
+
 async function fetchCrossrefWorkByDoi(doi) {
   const data = await fetchJson(buildCrossrefUrl(`/works/${encodeURIComponent(doi)}`));
   return normalizeCrossrefWork(data.message || {});
@@ -745,10 +973,10 @@ function confidenceForLookupError(error) {
   return error && error.status === 404 ? 'low' : 'medium';
 }
 
-async function analyzeReference(reference) {
+async function analyzeReference(reference, options = {}) {
   const doi = extractDoi(reference);
   const type = inferReferenceType(reference);
-  const isCanonicalArxivDoi = type === 'arxiv' && doi && doi.startsWith('10.48550/arxiv.');
+  const arxivIdentifier = extractArxivIdentifier(reference);
   const extractedMetadata = extractReferenceMetadata(reference);
   let confidence = 'low';
   let summary = 'No DOI detected. Best-effort verification will rely on author/title/journal matching.';
@@ -756,20 +984,69 @@ async function analyzeReference(reference) {
   let evidence = [];
   let doiFound = null;
   let matchedMetadata = candidateMetadata();
+  let matchedSource = null;
 
-  if (isCanonicalArxivDoi) {
-    confidence = 'medium';
-    doiFound = doi;
-    summary = `arXiv identifier detected and normalized to canonical DOI ${doi}.`;
-    evidence = ['Canonical DOI derived from the cited arXiv identifier'];
-    recommendations = ['Confirm that the arXiv title, author list, and version match the intended source.'];
+  if (arxivIdentifier) {
+    try {
+      if (options.arxivLookupError) throw options.arxivLookupError;
+      let candidate;
+      if (options.arxivCandidates instanceof Map) {
+        candidate = options.arxivCandidates.get(arxivIdentifier.requestedId.toLowerCase()) || null;
+      } else {
+        const lookup = options.fetchArxivEntriesByIds || fetchArxivEntriesByIds;
+        const candidates = await lookup([arxivIdentifier]);
+        candidate = candidates.get(arxivIdentifier.requestedId.toLowerCase()) || null;
+      }
+
+      doiFound = arxivIdentifier.canonicalDoi;
+      matchedSource = 'arxiv';
+      if (!candidate) {
+        confidence = 'low';
+        summary = `arXiv identifier ${arxivIdentifier.requestedId} was not found in the arXiv API.`;
+        evidence = [`arXiv identifier not found: ${arxivIdentifier.requestedId}`];
+        recommendations = ['Check the arXiv identifier and confirm that the cited preprint is publicly available.'];
+      } else {
+        const match = scoreCandidateMatch(reference, candidate);
+        confidence = match.confidence;
+        const versionMismatched = Boolean(arxivIdentifier.version && candidate.arxivVersion !== arxivIdentifier.version);
+        if (versionMismatched && confidence === 'high') confidence = 'medium';
+        matchedMetadata = candidateMetadata(candidate);
+        summary = `arXiv identifier ${arxivIdentifier.requestedId} resolved to ${describeCandidate(candidate)}.`;
+        evidence = [
+          `arXiv identifier matched: ${candidate.arxivId}${candidate.arxivVersion}`,
+          `arXiv title: ${candidate.title || 'not available'}`,
+          ...match.evidence
+        ];
+        if (candidate.authors) evidence.push(`arXiv authors: ${candidate.authors}`);
+        if (candidate.primaryCategory) evidence.push(`arXiv primary category: ${candidate.primaryCategory}`);
+        if (arxivIdentifier.version) {
+          evidence.push(versionMismatched
+            ? `arXiv version mismatch: cited ${arxivIdentifier.version}, returned ${candidate.arxivVersion || 'unversioned'}`
+            : `arXiv version matched: ${arxivIdentifier.version}`);
+        }
+        if (candidate.journalReference) evidence.push(`arXiv journal reference: ${candidate.journalReference}`);
+        if (candidate.publicationDoi) evidence.push(`arXiv publication DOI: ${candidate.publicationDoi}`);
+        recommendations = confidence === 'low'
+          ? ['The arXiv identifier resolved, but the cited metadata differs substantially from the arXiv record. Review it manually.']
+          : ['Confirm that the cited arXiv version is the intended version.'];
+      }
+    } catch (error) {
+      confidence = confidenceForLookupError(error);
+      doiFound = arxivIdentifier.canonicalDoi;
+      matchedSource = 'arxiv';
+      summary = `arXiv identifier ${arxivIdentifier.requestedId} was detected, but the arXiv lookup failed: ${describeLookupError(error)}.`;
+      evidence = [`arXiv lookup error: ${describeLookupError(error)}`];
+      recommendations = ['Check the arXiv identifier manually and retry when the arXiv API is available.'];
+    }
   } else if (doi) {
     try {
-      const candidate = await fetchCrossrefWorkByDoi(doi);
+      const lookup = options.fetchCrossrefWorkByDoi || fetchCrossrefWorkByDoi;
+      const candidate = await lookup(doi);
       const match = scoreCandidateMatch(reference, candidate);
       confidence = match.confidence;
       doiFound = candidate.doi || doi;
       matchedMetadata = candidateMetadata(candidate);
+      matchedSource = 'crossref';
       summary = `DOI resolved in Crossref: ${describeCandidate(candidate)}.`;
       evidence = [
         `Crossref title: ${candidate.title || 'not available'}`,
@@ -783,21 +1060,55 @@ async function analyzeReference(reference) {
       }
     } catch (error) {
       confidence = confidenceForLookupError(error);
+      matchedSource = 'crossref';
       summary = `DOI ${doi} was detected, but the Crossref lookup failed: ${describeLookupError(error)}.`;
       evidence = [`Lookup error: ${describeLookupError(error)}`];
       recommendations = ['Check the DOI manually and confirm the citation fields against the authoritative record.'];
     }
   } else {
     try {
-      const ranked = rankCandidates(reference, await searchCrossrefCandidates(reference));
+      const crossrefSearch = options.searchCrossrefCandidates || searchCrossrefCandidates;
+      const ranked = rankCandidates(reference, await crossrefSearch(reference));
       const best = ranked[0];
       const second = ranked[1];
+      let usedArxivFallback = false;
 
-      if (best) {
+      if (!best || best.match.confidence === 'low') {
+        try {
+          const arxivSearch = options.searchArxivCandidates || searchArxivCandidates;
+          const arxivRanked = rankCandidates(reference, await arxivSearch(reference));
+          const bestArxiv = arxivRanked[0];
+          if (bestArxiv && bestArxiv.match.confidence !== 'low') {
+            confidence = bestArxiv.match.confidence === 'high' ? 'medium' : bestArxiv.match.confidence;
+            doiFound = bestArxiv.doi;
+            matchedMetadata = candidateMetadata(bestArxiv);
+            matchedSource = 'arxiv';
+            usedArxivFallback = true;
+            summary = `Crossref had no viable match. Best arXiv candidate: ${describeCandidate(bestArxiv)}.`;
+            recommendations = ['Add the arXiv identifier or a stable URL if this is the intended preprint.'];
+            evidence = [
+              `arXiv candidates reviewed: ${arxivRanked.length}`,
+              `Best arXiv score: ${bestArxiv.match.score.toFixed(2)}`,
+              ...bestArxiv.match.evidence
+            ];
+            if (bestArxiv.authors) evidence.push(`arXiv candidate authors: ${bestArxiv.authors}`);
+            if (bestArxiv.primaryCategory) evidence.push(`arXiv primary category: ${bestArxiv.primaryCategory}`);
+            evidence.push('Identifier-free arXiv search matches are capped at medium confidence');
+          }
+        } catch (arxivError) {
+          if (!best) {
+            evidence.push('Crossref returned no candidates');
+            evidence.push(`arXiv fallback error: ${describeLookupError(arxivError)}`);
+          }
+        }
+      }
+
+      if (best && !usedArxivFallback) {
         confidence = best.match.confidence;
         if (confidence === 'high') confidence = 'medium';
         doiFound = best.doi;
         matchedMetadata = candidateMetadata(best);
+        matchedSource = 'crossref';
         summary = `No DOI was present in the citation. Best Crossref candidate: ${describeCandidate(best)}.`;
         recommendations = ['Add an explicit DOI or stable URL if available and verify the reference metadata.'];
         evidence = [
@@ -818,8 +1129,14 @@ async function analyzeReference(reference) {
         if (confidence === 'low') {
           recommendations.push('The title/author/venue/year overlap was weak, so this reference should be reviewed manually.');
         }
+      } else if (!best && !usedArxivFallback) {
+        confidence = 'low';
+        summary = 'No viable record was found in Crossref or arXiv.';
+        recommendations = ['Add a DOI, arXiv identifier, or stable URL and verify the citation manually.'];
+        if (!evidence.length) evidence = ['Crossref returned no candidates', 'arXiv returned no viable candidates'];
       }
     } catch (error) {
+      matchedSource = 'crossref';
       summary = `No DOI was detected and Crossref candidate search failed: ${describeLookupError(error)}.`;
       evidence = [`Lookup error: ${describeLookupError(error)}`];
       recommendations = ['Add a DOI or a stable URL and verify title, author, and venue details manually.'];
@@ -830,6 +1147,7 @@ async function analyzeReference(reference) {
     reference,
     type,
     doi: doiFound || doi,
+    source: matchedSource,
     confidence,
     metadata: {
       extracted: extractedMetadata,
@@ -973,6 +1291,9 @@ async function handleAnalyze(req, res) {
     const debugOutput = [];
     const references = extractReferencesFromText(extracted.processed, debugRequested ? debugOutput : null);
     const analyzed = new Array(references.length);
+    const arxivIdentifiers = references.map(extractArxivIdentifier).filter(Boolean);
+    let arxivCandidates = new Map();
+    let arxivLookupError = null;
 
     res.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -980,12 +1301,23 @@ async function handleAnalyze(req, res) {
     });
     writeAnalyzeEvent(res, 'references-found', { total: references.length });
 
+    if (arxivIdentifiers.length) {
+      try {
+        arxivCandidates = await fetchArxivEntriesByIds(arxivIdentifiers);
+      } catch (error) {
+        arxivLookupError = error;
+      }
+    }
+
     for (let index = 0; index < references.length; index += 1) {
       writeAnalyzeEvent(res, 'checking-reference', {
         index: index + 1,
         total: references.length
       });
-      analyzed[index] = await analyzeReference(references[index]);
+      analyzed[index] = await analyzeReference(references[index], {
+        arxivCandidates,
+        arxivLookupError
+      });
       writeAnalyzeEvent(res, 'checked-reference', {
         index: index + 1,
         total: references.length,
@@ -1079,6 +1411,8 @@ module.exports = {
   scoreCandidateMatch,
   rankCandidates,
   normalizeCrossrefWork,
+  normalizeArxivEntry,
+  parseArxivFeed,
   normalizeDoi,
   mapWithConcurrency,
   describeLookupError,
@@ -1088,5 +1422,8 @@ module.exports = {
   extractReferenceMetadata,
   extractYear,
   extractDoi,
+  extractArxivIdentifier,
+  fetchArxivEntriesByIds,
+  searchArxivCandidates,
   repairDoiWrapping
 };

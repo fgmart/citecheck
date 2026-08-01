@@ -37,10 +37,12 @@
     <h1>Citecheck</h1>
     <p>Upload a paper PDF to extract and review its references.</p>
     <p><b>Privacy:</b> Uploaded files are processed locally and then deleted.
-      Extracted reference data are sent to <a href="https://crossref.org" target="_blank" rel="noopener noreferrer">Crossref</a> for analysis.
+      Extracted reference data are sent to <a href="https://crossref.org" target="_blank" rel="noopener noreferrer">Crossref</a>
+      and, when appropriate, the <a href="https://arxiv.org" target="_blank" rel="noopener noreferrer">arXiv</a> API for analysis.
       Full source code is available on <a href="https://github.com/fgmart/citecheck" target="_blank" rel="noopener noreferrer">GitHub</a>.
       No AI is used in processing.
     </p>
+    <p>Thank you to arXiv for use of its open access interoperability.</p>
     <p><strong>Engine:</strong> <span id="engine-version">loading…</span> <a href="https://github.com/fgmart/citecheck/blob/main/README.md" target="_blank" rel="noopener noreferrer">README</a></p>
     <form id="upload-form">
       <label>
@@ -296,8 +298,9 @@
               <div id="reference-${index + 1}" class="card reference-card">
                 <h3>${index + 1}</h3>
                 <div class="citation-text">${escapeHtml(ref.reference)}</div>
-                <p><strong>Type:</strong> ${escapeHtml(ref.type)}</p>
-                <p><strong>DOI:</strong> ${renderDoi(ref.doi)}</p>
+                <p><strong>Type:</strong> ${escapeHtml(ref.type)}
+                   &nbsp;&nbsp;&nbsp;&nbsp;<strong>Metadata source:</strong> ${escapeHtml(ref.source === 'arxiv' ? 'arXiv' : ref.source === 'crossref' ? 'Crossref' : 'Not found')}
+                   &nbsp;&nbsp;&nbsp;&nbsp;<strong>DOI:</strong> ${renderDoi(ref.doi)}</p>
                 ${renderMetadataComparison(ref.metadata)}
                 <p class="confidence-${escapeHtml(ref.confidence)}"><strong>Confidence:</strong> ${escapeHtml(ref.confidence.toUpperCase())}</p>
                 <p><strong>Summary:</strong> ${escapeHtml(ref.summary)}</p>

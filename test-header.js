@@ -9,6 +9,7 @@ const {
   scoreCandidateMatch,
   rankCandidates,
   normalizeCrossrefWork,
+  parseArxivFeed,
   normalizeDoi,
   mapWithConcurrency,
   describeLookupError,
@@ -16,6 +17,8 @@ const {
   analyzeReference,
   extractReferenceMetadata,
   extractDoi,
+  extractArxivIdentifier,
+  fetchArxivEntriesByIds,
   repairDoiWrapping
 } = require('./server');
 
@@ -102,6 +105,43 @@ assert.strictEqual(
   extractDoi('[4] Jordan Fixture. 2026. A Synthetic Preprint. arXiv:2601.12345v2 [cs.EX] https://arxiv.org/abs/2601.12345'),
   '10.48550/arxiv.2601.12345'
 );
+assert.deepStrictEqual(
+  extractArxivIdentifier('[4] Jordan Fixture. 2026. A Synthetic Preprint. arXiv:2601.12345v2 [cs.EX]'),
+  {
+    baseId: '2601.12345',
+    version: 'v2',
+    requestedId: '2601.12345v2',
+    canonicalDoi: '10.48550/arxiv.2601.12345'
+  }
+);
+assert.strictEqual(extractArxivIdentifier('https://arxiv.org/abs/cs/9901002v1').requestedId, 'cs/9901002v1');
+
+const syntheticArxivFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2601.12345v2</id>
+    <title>Reliable Fixtures &amp; Structured Parser Tests</title>
+    <published>2026-01-15T10:00:00Z</published>
+    <updated>2026-02-20T11:00:00Z</updated>
+    <author><name>Jordan Fixture</name></author>
+    <author><name>Riley Sample</name></author>
+    <category term="cs.EX" />
+    <category term="cs.TEST" />
+    <arxiv:primary_category term="cs.EX" />
+    <arxiv:journal_ref>Journal of Synthetic Records 12 (2026) 1-9</arxiv:journal_ref>
+    <arxiv:doi>10.1000/fixture.2026.12345</arxiv:doi>
+    <link href="https://arxiv.org/abs/2601.12345v2" rel="alternate" type="text/html" />
+  </entry>
+</feed>`;
+const syntheticArxivCandidate = parseArxivFeed(syntheticArxivFeed)[0];
+assert.strictEqual(syntheticArxivCandidate.arxivId, '2601.12345');
+assert.strictEqual(syntheticArxivCandidate.arxivVersion, 'v2');
+assert.strictEqual(syntheticArxivCandidate.title, 'Reliable Fixtures & Structured Parser Tests');
+assert.strictEqual(syntheticArxivCandidate.authors, 'Jordan Fixture, Riley Sample');
+assert.strictEqual(syntheticArxivCandidate.year, 2026);
+assert.strictEqual(syntheticArxivCandidate.primaryCategory, 'cs.EX');
+assert.deepStrictEqual(syntheticArxivCandidate.categories, ['cs.EX', 'cs.TEST']);
+assert.strictEqual(syntheticArxivCandidate.publicationDoi, '10.1000/fixture.2026.12345');
 
 const inlineMarkerSample = `References\n[1] Author A, Author B. Title one. Journal 2020.\nThis is still part of the same reference.\n[2] Author C, Author D. Title two. Journal 2021.`;
 const inlineMarkerRefs = extractReferencesFromText(inlineMarkerSample);
@@ -366,10 +406,85 @@ async function runAsyncTests() {
   assert.deepStrictEqual(mapped, [2, 4, 6, 8]);
   assert.ok(maxActive <= 2);
 
-  const arxivMatch = await analyzeReference('[4] Jordan Fixture. 2026. A Synthetic Preprint. arXiv:2601.12345 [cs.EX] https://arxiv.org/abs/2601.12345');
+  const originalArxivFetch = global.fetch;
+  let arxivBatchCalls = 0;
+  let arxivBatchUrl = '';
+  global.fetch = async (url) => {
+    arxivBatchCalls += 1;
+    arxivBatchUrl = String(url);
+    return {
+      ok: true,
+      text: async () => syntheticArxivFeed
+    };
+  };
+  try {
+    const identifiers = [
+      extractArxivIdentifier('arXiv:2601.12345v2'),
+      extractArxivIdentifier('arXiv:2601.99999')
+    ];
+    const batched = await fetchArxivEntriesByIds(identifiers);
+    assert.strictEqual(arxivBatchCalls, 1);
+    assert.ok(new URL(arxivBatchUrl).searchParams.get('id_list').includes(','));
+    assert.strictEqual(batched.get('2601.12345v2').title, syntheticArxivCandidate.title);
+    assert.strictEqual(batched.get('2601.99999'), null);
+    await fetchArxivEntriesByIds(identifiers);
+    assert.strictEqual(arxivBatchCalls, 1);
+  } finally {
+    global.fetch = originalArxivFetch;
+  }
+
+  const directArxivCandidates = new Map([['2601.12345v2', syntheticArxivCandidate]]);
+  const arxivMatch = await analyzeReference('[4] Jordan Fixture and Riley Sample. 2026. Reliable Fixtures & Structured Parser Tests. arXiv:2601.12345v2 [cs.EX] https://arxiv.org/abs/2601.12345v2', {
+    arxivCandidates: directArxivCandidates
+  });
   assert.strictEqual(arxivMatch.doi, '10.48550/arxiv.2601.12345');
-  assert.strictEqual(arxivMatch.confidence, 'medium');
-  assert.ok(arxivMatch.summary.includes('normalized to canonical DOI'));
+  assert.strictEqual(arxivMatch.source, 'arxiv');
+  assert.strictEqual(arxivMatch.confidence, 'high');
+  assert.ok(arxivMatch.summary.includes('resolved'));
+  assert.ok(arxivMatch.evidence.some((line) => line.includes('arXiv identifier matched')));
+
+  const versionMismatchMatch = await analyzeReference('[4] Jordan Fixture and Riley Sample. 2026. Reliable Fixtures & Structured Parser Tests. arXiv:2601.12345v3', {
+    arxivCandidates: new Map([['2601.12345v3', syntheticArxivCandidate]])
+  });
+  assert.strictEqual(versionMismatchMatch.confidence, 'medium');
+  assert.ok(versionMismatchMatch.evidence.some((line) => line.includes('version mismatch')));
+
+  const missingArxivMatch = await analyzeReference('[4] Jordan Fixture. 2026. Missing Synthetic Preprint. arXiv:2601.99999', {
+    arxivCandidates: new Map([['2601.99999', null]])
+  });
+  assert.strictEqual(missingArxivMatch.confidence, 'low');
+  assert.ok(missingArxivMatch.summary.includes('was not found'));
+
+  let arxivFallbackCalls = 0;
+  const fallbackArxivMatch = await analyzeReference('[8] Jordan Fixture and Riley Sample. 2026. Reliable Fixtures & Structured Parser Tests.', {
+    searchCrossrefCandidates: async () => [],
+    searchArxivCandidates: async () => {
+      arxivFallbackCalls += 1;
+      return [syntheticArxivCandidate];
+    }
+  });
+  assert.strictEqual(arxivFallbackCalls, 1);
+  assert.strictEqual(fallbackArxivMatch.source, 'arxiv');
+  assert.strictEqual(fallbackArxivMatch.confidence, 'medium');
+  assert.ok(fallbackArxivMatch.summary.includes('Crossref had no viable match'));
+
+  let skippedArxivFallbackCalls = 0;
+  const crossrefPreferredMatch = await analyzeReference('[8] Jordan Fixture and Riley Sample. 2026. Reliable Fixtures & Structured Parser Tests. Journal of Synthetic Records.', {
+    searchCrossrefCandidates: async () => [{
+      title: 'Reliable Fixtures & Structured Parser Tests',
+      containerTitle: 'Journal of Synthetic Records',
+      authors: 'Jordan Fixture, Riley Sample',
+      year: 2026,
+      doi: '10.1000/fixture.2026.12345'
+    }],
+    searchArxivCandidates: async () => {
+      skippedArxivFallbackCalls += 1;
+      return [syntheticArxivCandidate];
+    }
+  });
+  assert.strictEqual(skippedArxivFallbackCalls, 0);
+  assert.strictEqual(crossrefPreferredMatch.source, 'crossref');
+  assert.strictEqual(crossrefPreferredMatch.confidence, 'medium');
 
   const originalFetch = global.fetch;
   global.fetch = async () => ({
