@@ -147,6 +147,14 @@ assert.strictEqual(editedBookChapterMetadata.title, 'Developing reliable synthet
 assert.strictEqual(editedBookChapterMetadata.venue, 'Handbook of Research on Structured Test Records');
 assert.strictEqual(editedBookChapterMetadata.pages, '58–64');
 
+const embeddedTitleQuoteMetadata = extractReferenceMetadata('[1] Avery Fixture. 2010. Why “Fixtures” Matter: A Framework for Reliable Parser Evaluation. Review of Synthetic Systems 14, 2 (2010), 105–112. doi:10.1000/fixture.2010.001');
+assert.strictEqual(embeddedTitleQuoteMetadata.authors, 'Avery Fixture');
+assert.strictEqual(embeddedTitleQuoteMetadata.title, 'Why “Fixtures” Matter: A Framework for Reliable Parser Evaluation');
+assert.strictEqual(embeddedTitleQuoteMetadata.venue, 'Review of Synthetic Systems');
+assert.strictEqual(embeddedTitleQuoteMetadata.volume, '14');
+assert.strictEqual(embeddedTitleQuoteMetadata.issue, '2');
+assert.strictEqual(embeddedTitleQuoteMetadata.pages, '105–112');
+
 const ieeeProceedingsMetadata = extractReferenceMetadata('[2] A. Fixture, B. Parser, C. Harness, D. Runner, and E. Example, “Using synthetic records for testing citation parsers,” in Proc. 21st Example Conf. on Document Testing, pp. 1–3, 2021, doi: 10.1000/ieee.fixture.2021.002.');
 assert.strictEqual(ieeeProceedingsMetadata.authors, 'A. Fixture, B. Parser, C. Harness, D. Runner, and E. Example');
 assert.strictEqual(ieeeProceedingsMetadata.date, '2021');

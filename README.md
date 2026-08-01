@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.28 2026-08-01
+- distinguish quoted phrases inside titles from fully quoted IEEE-style titles
+
 ## 2.2.27 2026-08-01
 - cap matches at MEDIUM when the cited author list is abbreviated with `et al.`
 

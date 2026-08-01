@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.27';
+const ENGINE_VERSION = 'citecheck-v2.2.28';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -261,6 +261,8 @@ function findQuotedTitle(reference) {
   const withoutMarker = stripReferenceMarker(reference);
   const match = withoutMarker.match(/[“"]([^”"]{3,})[”"]/);
   if (!match) return null;
+  const beforeQuote = withoutMarker.slice(0, match.index);
+  if (/\b(?:19|20)\d{2}\b/.test(beforeQuote)) return null;
   return {
     title: normalizeText(match[1]).replace(/[,;:\s]+$/g, ''),
     start: match.index,
