@@ -35,6 +35,10 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.1 2026-08-01
+- distinguish words such as `Processes` from proceedings abbreviations during title extraction
+- preserve ACM proceedings volume and acronym text while excluding event dates and locations
+
 ## 3.0 2026-08-01
 - verify explicit arXiv identifiers against the arXiv API and batch identifiers from the same paper
 - fall back to arXiv title search when Crossref returns no viable match

@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.0';
+const ENGINE_VERSION = 'citecheck-v3.1';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -321,7 +321,8 @@ function extractTitleCandidate(reference) {
     .filter(Boolean);
   const titleCandidate = segments.find((segment) => {
     const words = segment.split(/\s+/).filter(Boolean);
-    return words.length >= 2 && !/[;]/.test(segment) && !/(journal|proc|transactions|conference|press|springer|ieee|acm|arxiv|doi|https?)/i.test(segment);
+    const hasVenueIndicator = /\b(?:journal|proceedings?|transactions?|conference|press|springer|ieee|acm|arxiv|doi|https?)\b|(?:^|\s)proc\.(?=\s|$)/i.test(segment);
+    return words.length >= 2 && !/[;]/.test(segment) && !hasVenueIndicator;
   });
 
   return titleCandidate || titleSource.replace(/^[.\s]+/, '').slice(0, 160);
@@ -442,6 +443,16 @@ function extractPublicationDetails(reference) {
   const titleIndex = title ? cleaned.toLowerCase().indexOf(title.toLowerCase()) : -1;
   if (titleIndex >= 0) afterTitle = cleaned.slice(titleIndex + title.length);
   afterTitle = afterTitle.replace(/^[.,\s]+/, '').trim();
+
+  const proceedingsWithAcronym = afterTitle.match(/^In\s+(Proceedings.+\([^)]*\))(?=,|\.)/i);
+  if (proceedingsWithAcronym) {
+    return {
+      venue: proceedingsWithAcronym[1].trim(),
+      volume: '',
+      issue: '',
+      pages: extractTrailingPageRange(afterTitle)
+    };
+  }
 
   const dateParenthetical = "\\([^)]*(?:19|20)\\d{2}[^)]*\\)";
   const journalWithIssue = afterTitle.match(new RegExp(`^(.+?)\\s+(\\d+[A-Za-z]?),\\s*([A-Za-z0-9-]+)\\s*${dateParenthetical},\\s*([^.;]+(?:[–—-][^.;]+)?)`));

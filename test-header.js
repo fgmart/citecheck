@@ -243,6 +243,11 @@ const proceedingsPageMetadata = extractReferenceMetadata('[5] Irene Fixture, Saf
 assert.ok(proceedingsPageMetadata.venue.includes('Proceedings of the 52nd ACM Technical Symposium'));
 assert.strictEqual(proceedingsPageMetadata.pages, '191–197');
 
+const processesTitleMetadata = extractReferenceMetadata('[4] Riley Fixture. 2024. Experiences Using Research Processes in an Undergraduate Theory Course. In Proceedings of the 55th ACM Technical Symposium on Synthetic Systems V. 1 (TEST 2024), March 20–23, 2024, Sampleton, TS, USA. ACM, New York, NY, USA, 7 pages. 310–316 https://doi.org/10.1000/acm.fixture.2024.004.');
+assert.strictEqual(processesTitleMetadata.title, 'Experiences Using Research Processes in an Undergraduate Theory Course');
+assert.strictEqual(processesTitleMetadata.venue, 'Proceedings of the 55th ACM Technical Symposium on Synthetic Systems V. 1 (TEST 2024)');
+assert.strictEqual(processesTitleMetadata.pages, '310–316');
+
 const monthIssueMetadata = extractReferenceMetadata('[6] Phoebe Fixture, Jessica Example, Galit Sample, Randi Harness, and Cynthia Checker. 2020. Zedbot: Designing a Conversational Fixture for Users to Explore Parser Concepts. Proceedings of the Example Conference on Synthetic Intelligence 34, 09 (Apr. 2020), 13381–13388. https://doi.org/10.1000/example.v34i09.7061');
 assert.strictEqual(monthIssueMetadata.venue, 'Proceedings of the Example Conference on Synthetic Intelligence');
 assert.strictEqual(monthIssueMetadata.volume, '34');
