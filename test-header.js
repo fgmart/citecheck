@@ -210,6 +210,20 @@ const scoredMatch = scoreCandidateMatch('Smith, J. and Doe, A. 2020. Title of a 
 assert.strictEqual(scoredMatch.confidence, 'high');
 assert.ok(scoredMatch.evidence.some((line) => line.includes('Year matched: 2020')));
 
+const abbreviatedAuthorMatch = scoreCandidateMatch('[5] Avery Fixture et al. 2021. Advancing Synthetic Parsers with Structured Records. Journal of Fixture Research 600 (2021), 70–74. https://doi.org/10.1000/fixture.2021.005.', {
+  title: 'Advancing Synthetic Parsers with Structured Records',
+  containerTitle: 'Journal of Fixture Research',
+  authors: 'Avery Fixture, Blair Sample, Casey Harness, Drew Parser',
+  year: 2021,
+  volume: '600',
+  pages: '70-74',
+  doi: '10.1000/fixture.2021.005'
+});
+assert.strictEqual(abbreviatedAuthorMatch.confidence, 'medium');
+assert.strictEqual(abbreviatedAuthorMatch.details.hasAbbreviatedAuthorList, true);
+assert.ok(abbreviatedAuthorMatch.evidence.some((line) => line.includes('et al.')));
+assert.ok(abbreviatedAuthorMatch.evidence.some((line) => line.includes('DOI exactly matched')));
+
 const publicationDetailMatch = scoreCandidateMatch('[6] Casey Metric and Drew Parser. 2013. Widget Reasoning in K–12: A Review of the Synthetic Field. Journal of Parser Studies 42, 1 (2013), 38–43.', {
   title: 'Widget Reasoning in K–12',
   containerTitle: 'Journal of Parser Studies',

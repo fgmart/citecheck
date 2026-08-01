@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.27 2026-08-01
+- cap matches at MEDIUM when the cited author list is abbreviated with `et al.`
+
 ## 2.2.26 2026-08-01
 - preserve complete edited-book titles when extracting chapter publication venues
 

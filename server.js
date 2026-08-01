@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.26';
+const ENGINE_VERSION = 'citecheck-v2.2.27';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -523,6 +523,7 @@ function formatScoreLabel(score) {
 
 function scoreCandidateMatch(reference, candidate = {}) {
   const extractedMetadata = extractReferenceMetadata(reference);
+  const hasAbbreviatedAuthorList = /\bet\s+al\b/i.test(extractedMetadata.authors);
   const referenceTitle = extractTitleCandidate(reference);
   const titleScore = candidate.title ? Math.max(tokenOverlapScore(referenceTitle, candidate.title), tokenOverlapScore(reference, candidate.title)) : 0;
   const venueScore = candidate.containerTitle ? tokenOverlapScore(reference, candidate.containerTitle) : 0;
@@ -551,6 +552,7 @@ function scoreCandidateMatch(reference, candidate = {}) {
   const hasMatchedPublicationDetails = volumeMatched || issueMatched || pagesMatched;
   const hasSupportingIdentityMatch = doiMatched || authorScore > 0 || hasMatchedPublicationDetails;
   if (confidence === 'high' && !hasSupportingIdentityMatch) confidence = 'medium';
+  if (confidence === 'high' && hasAbbreviatedAuthorList) confidence = 'medium';
   if (confidence === 'medium' && !hasSupportingIdentityMatch && titleScore < 0.75) confidence = 'low';
 
   const evidence = [
@@ -578,6 +580,7 @@ function scoreCandidateMatch(reference, candidate = {}) {
   }
 
   if (doiMatched) evidence.push('DOI exactly matched');
+  if (hasAbbreviatedAuthorList) evidence.push('Cited author list uses et al.; confidence capped at medium');
 
   return {
     score,
@@ -593,7 +596,8 @@ function scoreCandidateMatch(reference, candidate = {}) {
       yearMatched,
       yearMismatched,
       severeYearMismatch,
-      doiMatched
+      doiMatched,
+      hasAbbreviatedAuthorList
     }
   };
 }
