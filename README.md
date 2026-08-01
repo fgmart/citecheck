@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.25 2026-08-01
+- fixed parsing issue with empty acknowledgments block
+
 ## 2.2.24 2026-07-29
 - recognize modern arXiv identifiers and expose their canonical `10.48550/arXiv.*` DOI
 

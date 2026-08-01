@@ -3,7 +3,10 @@ import sys
 import fitz
 
 
-REFERENCE_HEADING_RE = re.compile(r"^(references|bibliography)$", re.I)
+REFERENCE_HEADING_RE = re.compile(
+    r"^(?:(?:acknowledgments?|acknowledgements?)\s+)?(?:references|bibliography)$",
+    re.I,
+)
 BRACKET_REFERENCE_START_RE = re.compile(r"^\[(\d{1,3})\]\s+")
 NUMERIC_REFERENCE_START_RE = re.compile(r"^([1-9]\d{0,2})[.)]\s+")
 REFERENCE_START_RE = re.compile(r"^(?:\[(\d{1,3})\]|([1-9]\d{0,2})[.)])\s+")

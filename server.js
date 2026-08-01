@@ -5,13 +5,14 @@ const { execFileSync } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v2.2.24';
+const ENGINE_VERSION = 'citecheck-v2.2.25';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
 const CROSSREF_RETRIES = Number(process.env.CROSSREF_RETRIES || 4);
 const CROSSREF_MIN_INTERVAL_MS = Number(process.env.CROSSREF_MIN_INTERVAL_MS || 1500);
 const CITECHECK_MAX_REFERENCES = Number(process.env.CITECHECK_MAX_REFERENCES || 100);
+const REFERENCE_HEADING_RE = /^(?:(?:acknowledgments?|acknowledgements?)\s+)?(?:references|bibliography)$/i;
 let nextCrossrefRequestAt = 0;
 fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -50,7 +51,7 @@ function repairDoiWrapping(text) {
 
 function stripPageHeaders(text) {
   const lines = text.split(/\n/).map((line) => line.trim()).filter(Boolean);
-  const referenceHeadingIndex = lines.findIndex((line) => /^references$|^bibliography$/i.test(line));
+  const referenceHeadingIndex = lines.findIndex((line) => REFERENCE_HEADING_RE.test(line));
 
   if (referenceHeadingIndex < 0) {
     return lines.join('\n');
@@ -100,7 +101,7 @@ function looksLikeAuthorDateReferenceStart(line) {
 
 function extractReferencesFromText(text, debugSink = null) {
   const lines = text.split(/\r?\n/);
-  const referenceHeadingIndex = lines.findIndex((line) => /^references$|^bibliography$/i.test(line.trim()));
+  const referenceHeadingIndex = lines.findIndex((line) => REFERENCE_HEADING_RE.test(line.trim()));
   const sectionLines = referenceHeadingIndex >= 0 ? lines.slice(referenceHeadingIndex + 1) : lines;
   const sectionText = repairDoiWrapping(sectionLines.join('\n').trim());
 

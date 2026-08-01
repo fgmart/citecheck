@@ -1,4 +1,6 @@
 const assert = require('assert');
+const path = require('path');
+const { spawnSync } = require('child_process');
 const {
   extractReferencesFromText,
   stripPageHeaders,
@@ -36,6 +38,39 @@ const refs = extractReferencesFromText(sample);
 assert.strictEqual(refs.length, 2);
 assert.ok(refs[0].includes('[1] Author A'));
 assert.ok(refs[1].includes('[2] Author C'));
+
+const mergedHeadingSample = `
+1. A numbered survey response in the body must not become a citation.
+[7] A body paragraph can begin with an in-text citation after column reordering.
+Acknowledgments References
+[1] Avery Fixture. 2024. First synthetic citation. Journal of Parser Fixtures 1, 1, 1–4.
+[2] Blair Sample. 2025. Second synthetic citation. Journal of Parser Fixtures 2, 1, 5–8.
+[3] Casey Harness. 2026. Third synthetic citation. Journal of Parser Fixtures 3, 1, 9–12.
+`;
+const mergedHeadingRefs = extractReferencesFromText(mergedHeadingSample);
+assert.strictEqual(mergedHeadingRefs.length, 3);
+assert.ok(mergedHeadingRefs[0].startsWith('[1] Avery Fixture'));
+assert.ok(mergedHeadingRefs[1].startsWith('[2] Blair Sample'));
+assert.ok(mergedHeadingRefs[2].startsWith('[3] Casey Harness'));
+
+const pythonHeadingRegression = spawnSync(
+  path.join(__dirname, '.venv', 'bin', 'python'),
+  ['-c', [
+    'from scripts.extract_pdf_text import build_reference_groups',
+    'blocks = [',
+    '  (0, 0, 1, 1, "1. A numbered body item."),',
+    '  (0, 1, 1, 2, "Acknowledgments References"),',
+    '  (0, 2, 1, 3, "[1] Avery Fixture. 2024. First synthetic citation."),',
+    '  (0, 3, 1, 4, "[2] Blair Sample. 2025. Second synthetic citation."),',
+    '  (0, 4, 1, 5, "[3] Casey Harness. 2026. Third synthetic citation."),',
+    ']',
+    'groups = build_reference_groups(blocks)',
+    'assert len(groups) == 3, groups',
+    'assert groups[0].startswith("[1] Avery Fixture"), groups',
+  ].join('\n')],
+  { cwd: __dirname, encoding: 'utf8' }
+);
+assert.strictEqual(pythonHeadingRegression.status, 0, pythonHeadingRegression.stderr);
 
 const longBlockSample = `References [15] First citation text that should be its own reference. [16] Second citation text that should also be its own reference. [2] Third citation text that should be separated too.`;
 const longBlockRefs = extractReferencesFromText(longBlockSample);
