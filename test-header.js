@@ -142,6 +142,11 @@ assert.strictEqual(twoWordTitleMetadata.volume, '49');
 assert.strictEqual(twoWordTitleMetadata.issue, '3');
 assert.strictEqual(twoWordTitleMetadata.pages, '33–35');
 
+const editedBookChapterMetadata = extractReferenceMetadata('[10] Avery Fixture and Blair Sample. 2011. Developing reliable synthetic parsers. In Handbook of Research on Structured Test Records. Fixture Press, 58–64.');
+assert.strictEqual(editedBookChapterMetadata.title, 'Developing reliable synthetic parsers');
+assert.strictEqual(editedBookChapterMetadata.venue, 'Handbook of Research on Structured Test Records');
+assert.strictEqual(editedBookChapterMetadata.pages, '58–64');
+
 const ieeeProceedingsMetadata = extractReferenceMetadata('[2] A. Fixture, B. Parser, C. Harness, D. Runner, and E. Example, “Using synthetic records for testing citation parsers,” in Proc. 21st Example Conf. on Document Testing, pp. 1–3, 2021, doi: 10.1000/ieee.fixture.2021.002.');
 assert.strictEqual(ieeeProceedingsMetadata.authors, 'A. Fixture, B. Parser, C. Harness, D. Runner, and E. Example');
 assert.strictEqual(ieeeProceedingsMetadata.date, '2021');

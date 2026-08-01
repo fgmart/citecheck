@@ -27,6 +27,9 @@ python -m venv .venv
 
 # Version History
 
+## 2.2.26 2026-08-01
+- preserve complete edited-book titles when extracting chapter publication venues
+
 ## 2.2.25 2026-08-01
 - fixed parsing issue with empty acknowledgments block
 
