@@ -35,6 +35,11 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.9 2026-08-02
+- distinguish a real author-date bibliography heading from an earlier table-of-contents entry
+- group flush-left bibliography continuations using adaptive vertical spacing and stop at the following section
+- parse each entry independently, including APA-like journal, report, and organizational-author metadata
+
 ## 3.8 2026-08-02
 - preserve centered single-column bibliographies and reference continuations near the top of a new page
 - parse numbered trailing-year bibliography entries, including conference and volume/issue/page fields

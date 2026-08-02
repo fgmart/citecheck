@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.8';
+const ENGINE_VERSION = 'citecheck-v3.9';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -112,7 +112,7 @@ function looksLikeExtractedReferences(text) {
 }
 
 function looksLikeAuthorDateReferenceStart(line) {
-  return /^[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+){0,3},\s+.+\((?:19|20)\d{2}(?:[,;)])/.test(line);
+  return /^.{2,320}?\((?:19|20)\d{2}(?:[a-z]|,\s*[^)]*)?\)\.\s+/.test(line);
 }
 
 function looksLikeStandaloneSectionHeading(line) {
@@ -165,8 +165,9 @@ function extractReferencesFromText(text, debugSink = null) {
       continue;
     }
 
-    const markerAtLineStart = /^(?:\[(?:\d{1,3})\]|(?:[1-9]\d{0,2})[.)])\s+/.test(line);
-    if (markerAtLineStart) {
+    const referenceStartAtLine = /^(?:\[(?:\d{1,3})\]|(?:[1-9]\d{0,2})[.)])\s+/.test(line)
+      || looksLikeAuthorDateReferenceStart(line);
+    if (referenceStartAtLine) {
       if (currentLineReference) lineBasedReferences.push(currentLineReference.trim());
       currentLineReference = line;
     } else if (currentLineReference) {
@@ -326,6 +327,9 @@ function findQuotedTitle(reference) {
 }
 
 function extractTitleCandidate(reference) {
+  const apaMetadata = parseApaLikeReference(reference);
+  if (apaMetadata) return apaMetadata.title;
+
   const trailingYearMetadata = parseTrailingYearReference(reference);
   if (trailingYearMetadata) return trailingYearMetadata.title;
 
@@ -378,6 +382,7 @@ function cleanReferenceForMetadata(reference) {
     .replace(/\bdoi:\s*10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi, '')
     .replace(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi, '')
     .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\b(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/\S+/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -389,10 +394,78 @@ function findNonInitialSentenceBoundary(text, allowQuestionMark = false) {
     const after = text.slice(index + 1);
     if (!/^\s+/.test(after)) continue;
     if (match[0] === '?' && !/^(?:In\s+|Proceedings\b|[A-Z][^.!?]+,\s*\d+[A-Za-z]?\s*\()/i.test(after.trimStart())) continue;
-    if (match[0] === '.' && /(?:^|\s)[A-Z]$/.test(text.slice(0, index))) continue;
+    if (match[0] === '.' && /(?:^|[\s(,])[A-Z]$/.test(text.slice(0, index))) continue;
+    if (match[0] === '.' && /(?:[A-Z]\.){2,}[A-Z]$/.test(text.slice(0, index))) continue;
+    if (match[0] === '.' && /\b(?:vs|etc|al)$/i.test(text.slice(0, index))) continue;
     return { index, punctuation: match[0], end: index + 1 + after.match(/^\s+/)[0].length };
   }
   return null;
+}
+
+function parseApaLikeReference(reference) {
+  const cleaned = cleanReferenceForMetadata(reference);
+  const match = cleaned.match(/^(.{2,320}?)\s*\(((?:19|20)\d{2})(?:[a-z]|,\s*[^)]*)?\)\.\s*(.+)$/);
+  if (!match) return null;
+
+  const authors = match[1].trim();
+  const date = match[2];
+  const remainder = match[3].trim();
+  if (!authors || !remainder) return null;
+
+  const titleBoundary = findNonInitialSentenceBoundary(remainder);
+  let title = '';
+  let publication = '';
+  if (titleBoundary) {
+    title = remainder.slice(0, titleBoundary.index).trim();
+    publication = remainder.slice(titleBoundary.end).trim();
+  } else {
+    title = remainder.replace(/[.\s]+$/g, '').trim();
+  }
+  if (!title) return null;
+
+  title = title
+    .replace(/\s+(?:\[[^\]]+\]|\([^)]*(?:report|paper|preprint)[^)]*\))$/i, '')
+    .trim();
+
+  let details = publication
+    .replace(/^\[[^\]]+\]\.\s*/i, '')
+    .trim();
+  let venue = '';
+  let volume = '';
+  let issue = '';
+  let pages = '';
+
+  const journalWithIssue = details.match(/^(.+?),\s*(?:Vol\.?\s*)?(\d+[A-Za-z]?)\s*\(([^)]+)\),\s*((?:Article\s+)?[^.;]+)/i);
+  const journalWithoutIssue = details.match(/^(.+?),\s*(?:Vol\.?\s*)?(\d+[A-Za-z]?),\s*((?:Article\s+)?[^.;]+)/i);
+  if (/^In\s+/i.test(details)) {
+    const pageMatch = details.match(/\bpp?\.\s*([^)]+)/i);
+    pages = pageMatch ? pageMatch[1].trim() : '';
+    venue = details
+      .replace(/^In\s+/i, '')
+      .replace(/^.+?\(Eds?\.\),\s*/i, '')
+      .replace(/\s*\([^)]*\bpp?\.\s*[^)]+\).*$/i, '')
+      .replace(/[.\s]+$/g, '')
+      .trim();
+  } else if (journalWithIssue) {
+    venue = journalWithIssue[1].trim();
+    volume = journalWithIssue[2].trim();
+    issue = journalWithIssue[3].trim();
+    pages = journalWithIssue[4].trim();
+  } else if (journalWithoutIssue) {
+    venue = journalWithoutIssue[1].trim();
+    volume = journalWithoutIssue[2].trim();
+    pages = journalWithoutIssue[3].trim();
+  } else {
+    details = details.replace(/^\([^)]*(?:report|paper|preprint)[^)]*\)\.\s*/i, '').trim();
+    if (details) {
+      const publisherAfterLocation = details.match(/:\s*([^.]+)\.?$/);
+      venue = (publisherAfterLocation ? publisherAfterLocation[1] : details.split(/\.\s*/)[0])
+        .replace(/[.\s]+$/g, '')
+        .trim();
+    }
+  }
+
+  return { authors, date, title, venue, volume, issue, pages };
 }
 
 function parseTrailingYearReference(reference) {
@@ -438,6 +511,9 @@ function parseTrailingYearReference(reference) {
 }
 
 function extractAuthorsCandidate(reference) {
+  const apaMetadata = parseApaLikeReference(reference);
+  if (apaMetadata) return apaMetadata.authors;
+
   const trailingYearMetadata = parseTrailingYearReference(reference);
   if (trailingYearMetadata) return trailingYearMetadata.authors;
 
@@ -530,6 +606,16 @@ function extractIeeePublicationDetails(reference) {
 }
 
 function extractPublicationDetails(reference) {
+  const apaMetadata = parseApaLikeReference(reference);
+  if (apaMetadata) {
+    return {
+      venue: apaMetadata.venue,
+      volume: apaMetadata.volume,
+      issue: apaMetadata.issue,
+      pages: apaMetadata.pages
+    };
+  }
+
   const trailingYearMetadata = parseTrailingYearReference(reference);
   if (trailingYearMetadata) {
     return {

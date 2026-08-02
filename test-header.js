@@ -123,6 +123,40 @@ const pythonSingleColumnBibliographyRegression = spawnSync(
 );
 assert.strictEqual(pythonSingleColumnBibliographyRegression.status, 0, pythonSingleColumnBibliographyRegression.stderr);
 
+const pythonFlushLeftAuthorDateRegression = spawnSync(
+  path.join(__dirname, '.venv', 'bin', 'python'),
+  ['-c', [
+    'import fitz',
+    'from scripts.extract_pdf_text import build_unnumbered_reference_groups, find_reference_heading',
+    'doc = fitz.open()',
+    'toc = doc.new_page(width=612, height=792)',
+    'toc.insert_text((72, 180), "References", fontsize=12)',
+    'toc.insert_text((72, 205), "A contents entry followed by ordinary synthetic text.", fontsize=10)',
+    'body = doc.new_page(width=612, height=792)',
+    'body.insert_text((72, 90), "Synthetic body material without bibliography records.", fontsize=10)',
+    'refs = doc.new_page(width=612, height=792)',
+    'refs.insert_text((72, 70), "References", fontsize=18)',
+    'refs.insert_text((72, 110), "Fixture, A. (2024). A complete synthetic article title.", fontsize=10)',
+    'refs.insert_text((72, 124), "Journal of Fixture Records, 4(2), 10-19. https://doi.org/10.1000/fixture.2024.1", fontsize=10)',
+    'refs.insert_text((72, 154), "Example Research Group. (2025). A synthetic organizational report.", fontsize=10)',
+    'refs.insert_text((72, 168), "Example Research Group. https://example.invalid/report", fontsize=10)',
+    'refs.insert_text((72, 198), "Sample, B., Harness, C., & Runner, D. (2026). A wrapped synthetic citation.", fontsize=10)',
+    'refs.insert_text((72, 212), "Synthetic Review, 8(1), 20-29. https://doi.org/10.1000/fixture.2026.2", fontsize=10)',
+    'after = doc.new_page(width=612, height=792)',
+    'after.insert_text((72, 70), "Acknowledgments", fontsize=18)',
+    'after.insert_text((72, 105), "Synthetic contributor information must not join a citation.", fontsize=10)',
+    'heading_page, _ = find_reference_heading(doc)',
+    'assert heading_page == 2, heading_page',
+    'groups = build_unnumbered_reference_groups(doc)',
+    'assert len(groups) == 3, groups',
+    'assert "Journal of Fixture Records" in groups[0], groups',
+    'assert groups[1].startswith("Example Research Group"), groups',
+    'assert "Acknowledgments" not in groups[-1], groups',
+  ].join('\n')],
+  { cwd: __dirname, encoding: 'utf8' }
+);
+assert.strictEqual(pythonFlushLeftAuthorDateRegression.status, 0, pythonFlushLeftAuthorDateRegression.stderr);
+
 const longBlockSample = `References [15] First citation text that should be its own reference. [16] Second citation text that should also be its own reference. [2] Third citation text that should be separated too.`;
 const longBlockRefs = extractReferencesFromText(longBlockSample);
 assert.strictEqual(longBlockRefs.length, 3);
@@ -216,6 +250,39 @@ const parenthesizedYearMetadata = extractReferenceMetadata('Fixture, C. J., Exam
 assert.strictEqual(parenthesizedYearMetadata.authors, 'Fixture, C. J., Example, L. A., Pattern, J., Mock, E., Trial, J. K., Case, S. E., ... & Sample, G. C.');
 assert.strictEqual(parenthesizedYearMetadata.date, '2007');
 assert.strictEqual(parenthesizedYearMetadata.title, 'The taxonomy of synthetic parser examples');
+assert.strictEqual(parenthesizedYearMetadata.venue, 'Annu. Rev. Test Data');
+assert.strictEqual(parenthesizedYearMetadata.volume, '28');
+assert.strictEqual(parenthesizedYearMetadata.pages, '235-258');
+
+const apaIssueMetadata = extractReferenceMetadata('Fixture, A. B., & Sample, C. D. (2025). A synthetic APA-like article. Journal of Fixture Records, 18(3), 44–59. https://doi.org/10.1000/fixture.2025.18');
+assert.strictEqual(apaIssueMetadata.title, 'A synthetic APA-like article');
+assert.strictEqual(apaIssueMetadata.venue, 'Journal of Fixture Records');
+assert.strictEqual(apaIssueMetadata.volume, '18');
+assert.strictEqual(apaIssueMetadata.issue, '3');
+assert.strictEqual(apaIssueMetadata.pages, '44–59');
+
+const apaOrganizationMetadata = extractReferenceMetadata('S.A.F.E. Fixture Alliance. (2026). S.A.F.E. by Design: Recommendations for synthetic parser evaluation (Task Force report). Fixture Alliance. https://example.invalid/fixture-report');
+assert.strictEqual(apaOrganizationMetadata.authors, 'S.A.F.E. Fixture Alliance.');
+assert.strictEqual(apaOrganizationMetadata.title, 'S.A.F.E. by Design: Recommendations for synthetic parser evaluation');
+assert.strictEqual(apaOrganizationMetadata.venue, 'Fixture Alliance');
+
+const apaAbbreviationMetadata = extractReferenceMetadata('Fixture, A., & Sample, B. (2025). Comparing guided vs. non-guided synthetic parsers [Preprint]. Fixture Archive. https://doi.org/10.1000/fixture.2025.99');
+assert.strictEqual(apaAbbreviationMetadata.title, 'Comparing guided vs. non-guided synthetic parsers');
+assert.strictEqual(apaAbbreviationMetadata.venue, 'Fixture Archive');
+
+const apaEditedBookMetadata = extractReferenceMetadata('Fixture, A. (2024). A synthetic chapter. In B. Sample & C. Harness (Eds.), Handbook of Fixture Parsing (pp. 20–31). Fixture Press.');
+assert.strictEqual(apaEditedBookMetadata.title, 'A synthetic chapter');
+assert.ok(apaEditedBookMetadata.venue.includes('Handbook of Fixture Parsing'));
+assert.strictEqual(apaEditedBookMetadata.pages, '20–31');
+
+const mixedStyleReferenceLines = `Fixture, A. B. (2025). A synthetic APA entry. Journal of Fixture Records, 2(1), 1-9.
+[2] B. Sample and C. Harness, “A synthetic IEEE entry,” Journal of Parser Fixtures, vol. 3, no. 2, pp. 10-20, 2026.
+Example Research Group. (2024). A second synthetic organizational entry. Fixture Press.`;
+const mixedStyleRefs = extractReferencesFromText(mixedStyleReferenceLines);
+assert.strictEqual(mixedStyleRefs.length, 3);
+assert.strictEqual(extractReferenceMetadata(mixedStyleRefs[0]).venue, 'Journal of Fixture Records');
+assert.strictEqual(extractReferenceMetadata(mixedStyleRefs[1]).venue, 'Journal of Parser Fixtures');
+assert.strictEqual(extractReferenceMetadata(mixedStyleRefs[2]).authors, 'Example Research Group.');
 
 const extractedMetadata = extractReferenceMetadata('[8] Morgan Tester and Riley Example. 2025. Calibrating Widget Classifiers in the Age of Synthetic Data. ACM Trans. Test. Eval. 25, 3, Article 26 (June 2025), 9 pages. doi:10.1000/acm.test.2025.26');
 assert.strictEqual(extractedMetadata.authors, 'Morgan Tester and Riley Example');

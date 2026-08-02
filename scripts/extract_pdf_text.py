@@ -18,6 +18,10 @@ SECTION_STOP_RE = re.compile(
 SECTION_BOUNDARY_MARKER = "\x00CITECHECK_SECTION_BOUNDARY\x00"
 INLINE_REFERENCE_START_RE = re.compile(r"(?<!\S)(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])(?=\s+[\w\"'“])")
 YEAR_RE = re.compile(r"\((?:19|20)\d{2}(?:[,;)])")
+AUTHOR_DATE_START_RE = re.compile(
+    r"^.{2,320}?\((?:19|20)\d{2}(?:[a-z]|,\s*[^)]*)?\)\.\s+",
+    re.I,
+)
 
 
 def normalize_text(text):
@@ -94,7 +98,7 @@ def has_inline_reference_start(text):
 
 def is_structural_section_heading(page, block):
     x0, y0, x1, _, text = block
-    if REFERENCE_HEADING_RE.match(text) or is_reference_start(text):
+    if REFERENCE_HEADING_RE.match(text) or is_reference_start(text) or AUTHOR_DATE_START_RE.match(text):
         return False
 
     letters = re.sub(r"[^A-Za-z]", "", text)
@@ -303,11 +307,81 @@ def build_reference_groups(blocks, heading_seen=False):
 
 
 def find_reference_heading(doc):
+    candidates = []
     for page_index, page in enumerate(doc):
         for line in ordered_lines(page):
             if REFERENCE_HEADING_RE.match(line[4]):
-                return page_index, line
-    return None, None
+                candidates.append((page_index, line))
+
+    if not candidates:
+        return None, None
+
+    def candidate_score(candidate):
+        page_index, heading_line = candidate
+        score = 0
+        inspected = 0
+
+        # A real bibliography heading is followed immediately by a dense run of
+        # author-date entries. A table-of-contents entry with the same text is
+        # not. Validate the local content instead of accepting the first match.
+        for nearby_page_index in range(page_index, min(len(doc), page_index + 2)):
+            nearby_page = doc[nearby_page_index]
+            for nearby_line in sorted(ordered_lines(nearby_page), key=lambda item: (item[1], item[0])):
+                if nearby_page_index == page_index and nearby_line[1] <= heading_line[1]:
+                    continue
+                text = repair_line_wrapping(nearby_line[4])
+                if not text or REFERENCE_HEADING_RE.match(text):
+                    continue
+                inspected += 1
+                if AUTHOR_DATE_START_RE.match(text):
+                    score += 8
+                elif YEAR_RE.search(text):
+                    score += 1
+                if re.search(r"(?:doi\.org/10\.|\bdoi:\s*10\.)", text, re.I):
+                    score += 2
+                if inspected >= 40:
+                    break
+            if inspected >= 40:
+                break
+
+        if heading_line[1] <= doc[page_index].rect.height * 0.2:
+            score += 3
+        return score
+
+    return max(candidates, key=candidate_score)
+
+
+def split_unnumbered_column(column):
+    if not column:
+        return []
+
+    gaps = [
+        column[index + 1][1] - column[index][1]
+        for index in range(len(column) - 1)
+        if column[index + 1][1] > column[index][1]
+    ]
+    ordinary_gaps = [gap for gap in gaps if gap <= statistics.median(gaps) * 1.25] if gaps else []
+    line_gap = statistics.median(ordinary_gaps or gaps) if gaps else 0
+    paragraph_gap = line_gap * 1.45 if line_gap else float("inf")
+
+    groups = []
+    current = []
+    previous = None
+    for line in column:
+        text = repair_line_wrapping(line[4])
+        if not text or REFERENCE_HEADING_RE.match(text):
+            continue
+        gap = line[1] - previous[1] if previous is not None else 0
+        if current and gap > paragraph_gap:
+            groups.append(repair_line_wrapping(" ".join(current)))
+            current = [text]
+        else:
+            current.append(text)
+        previous = line
+
+    if current:
+        groups.append(repair_line_wrapping(" ".join(current)))
+    return groups
 
 
 def build_unnumbered_reference_groups(doc):
@@ -316,7 +390,6 @@ def build_unnumbered_reference_groups(doc):
         return []
 
     reference_groups = []
-    current_group = []
 
     for page_index in range(heading_page_index, len(doc)):
         page = doc[page_index]
@@ -325,6 +398,10 @@ def build_unnumbered_reference_groups(doc):
             block[1] for block in page_blocks
             if page_index > heading_page_index and is_structural_section_heading(page, block)
         ]
+        boundary_positions.extend(
+            line[1] for line in ordered_lines(page)
+            if page_index > heading_page_index and SECTION_STOP_RE.match(line[4])
+        )
         boundary_y = min(boundary_positions) if boundary_positions else None
         columns = lines_by_column(ordered_lines(page), page.rect.width)
 
@@ -341,28 +418,19 @@ def build_unnumbered_reference_groups(doc):
             if not column:
                 continue
 
-            base_x = min(line[0] for line in column)
-            for line in column:
-                text = repair_line_wrapping(line[4])
-                if not text or REFERENCE_HEADING_RE.match(text):
-                    continue
-
-                is_first_line_indent = line[0] <= base_x + 8
-                if is_first_line_indent and current_group:
-                    reference_groups.append(repair_line_wrapping(" ".join(current_group)))
-                    current_group = [text]
+            page_groups = split_unnumbered_column(column)
+            for group in page_groups:
+                if reference_groups and not AUTHOR_DATE_START_RE.match(group):
+                    reference_groups[-1] = repair_line_wrapping(f"{reference_groups[-1]} {group}")
                 else:
-                    current_group.append(text)
+                    reference_groups.append(group)
 
         if boundary_y is not None:
             break
 
-    if current_group:
-        reference_groups.append(repair_line_wrapping(" ".join(current_group)))
-
     return [
         group for group in reference_groups
-        if YEAR_RE.search(group) and len(group.split()) >= 8
+        if YEAR_RE.search(group) and len(group.split()) >= 5
     ]
 
 
