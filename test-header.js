@@ -279,6 +279,21 @@ const scoredMatch = scoreCandidateMatch('Smith, J. and Doe, A. 2020. Title of a 
 assert.strictEqual(scoredMatch.confidence, 'high');
 assert.ok(scoredMatch.evidence.some((line) => line.includes('Year matched: 2020')));
 
+const exactFieldOverlapMatch = scoreCandidateMatch('[5] Avery Fixture and Blair Sample. 2023. Building Reliable Synthetic Citation Checks. Journal of Fixture Validation 68, 3 (2023), 423–434. doi:10.1000/fixture.2023.005', {
+  title: 'Building Reliable Synthetic Citation Checks',
+  containerTitle: 'Journal of Fixture Validation',
+  authors: 'Avery Fixture, Blair Sample',
+  year: 2024,
+  volume: '68',
+  issue: '3',
+  pages: '423-434',
+  doi: '10.1000/fixture.2023.005'
+});
+assert.ok(exactFieldOverlapMatch.evidence.includes('Author overlap: strong'));
+assert.ok(exactFieldOverlapMatch.evidence.includes('Venue overlap: strong'));
+assert.ok(exactFieldOverlapMatch.evidence.includes('Year mismatch: cited 2023, candidate 2024'));
+assert.strictEqual(exactFieldOverlapMatch.confidence, 'high');
+
 const abbreviatedAuthorMatch = scoreCandidateMatch('[5] Avery Fixture et al. 2021. Advancing Synthetic Parsers with Structured Records. Journal of Fixture Research 600 (2021), 70–74. https://doi.org/10.1000/fixture.2021.005.', {
   title: 'Advancing Synthetic Parsers with Structured Records',
   containerTitle: 'Journal of Fixture Research',

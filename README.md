@@ -35,6 +35,9 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.7 2026-08-02
+- compare author and venue candidates with their extracted citation fields so exact matches are not diluted by unrelated citation text
+
 ## 3.6 2026-08-01
 - combine Crossref title and subtitle fields when presenting and matching publication titles
 - preserve complete Crossref author lists instead of truncating them after eight authors

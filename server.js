@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.6';
+const ENGINE_VERSION = 'citecheck-v3.7';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -606,8 +606,8 @@ function scoreCandidateMatch(reference, candidate = {}) {
   const hasAbbreviatedAuthorList = /\bet\s+al\b/i.test(extractedMetadata.authors);
   const referenceTitle = extractTitleCandidate(reference);
   const titleScore = candidate.title ? Math.max(tokenOverlapScore(referenceTitle, candidate.title), tokenOverlapScore(reference, candidate.title)) : 0;
-  const venueScore = candidate.containerTitle ? tokenOverlapScore(reference, candidate.containerTitle) : 0;
-  const authorScore = candidate.authors ? tokenOverlapScore(reference, candidate.authors) : 0;
+  const venueScore = candidate.containerTitle ? tokenOverlapScore(extractedMetadata.venue, candidate.containerTitle) : 0;
+  const authorScore = candidate.authors ? tokenOverlapScore(extractedMetadata.authors, candidate.authors) : 0;
   const referenceYear = extractYear(reference);
   const yearMatched = Boolean(candidate.year && referenceYear && candidate.year === referenceYear);
   const yearMismatched = Boolean(candidate.year && referenceYear && candidate.year !== referenceYear);
