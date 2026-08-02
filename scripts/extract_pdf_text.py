@@ -1,4 +1,5 @@
 import re
+import statistics
 import sys
 import fitz
 
@@ -14,6 +15,7 @@ SECTION_STOP_RE = re.compile(
     r"^(abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b",
     re.I,
 )
+SECTION_BOUNDARY_MARKER = "\x00CITECHECK_SECTION_BOUNDARY\x00"
 INLINE_REFERENCE_START_RE = re.compile(r"(?<!\S)(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])(?=\s+[\w\"'“])")
 YEAR_RE = re.compile(r"\((?:19|20)\d{2}(?:[,;)])")
 
@@ -45,6 +47,11 @@ def reference_number(text):
 
 
 def repair_line_wrapping(text):
+    # Some TeX-era PDF fonts expose isolated mojibake code points through
+    # PyMuPDF. Repair only the unambiguous forms observed in citation fields.
+    text = re.sub(r"(?<=\d)â(?=\d)", "–", text)
+    text = text.replace("Ãº", "ú")
+
     # PDF line extraction can insert whitespace at any visual line break. Repair
     # unambiguous DOI boundaries before applying the more general suffix repair.
     text = re.sub(r"(\b(?:doi:\s*|https?://doi\.org/)?10\.)\s+(?=\d{4,9}/)", r"\1", text, flags=re.I)
@@ -59,6 +66,7 @@ def repair_line_wrapping(text):
         return f"{left}{right}"
 
     text = re.sub(r"([A-Za-z]{1,})-\s+([a-z]{2,})", repair_hyphen, text)
+    text = re.sub(r"([A-Za-z]{2,})-\s+([A-Z][a-z]+)\b", r"\1-\2", text)
     return normalize_text(text)
 
 
@@ -82,6 +90,50 @@ def split_inline_references(text):
 
 def has_inline_reference_start(text):
     return bool(INLINE_REFERENCE_START_RE.search(text))
+
+
+def is_structural_section_heading(page, block):
+    x0, y0, x1, _, text = block
+    if REFERENCE_HEADING_RE.match(text) or is_reference_start(text):
+        return False
+
+    letters = re.sub(r"[^A-Za-z]", "", text)
+    if len(letters) < 4:
+        return False
+    if len(text) > 80 or len(text.split()) > 10:
+        return False
+    if y0 > page.rect.height * 0.2:
+        return False
+
+    block_center = (x0 + x1) / 2
+    page_center = page.rect.width / 2
+    if (
+        abs(block_center - page_center) > page.rect.width * 0.12
+        or (x1 - x0) > page.rect.width * 0.5
+    ):
+        return False
+
+    all_sizes = []
+    block_sizes = []
+    block_fonts = []
+    for styled_block in page.get_text("dict").get("blocks", []):
+        for line in styled_block.get("lines", []):
+            line_x0, line_y0, line_x1, line_y1 = line["bbox"]
+            overlaps_block = not (
+                line_x1 < x0 or line_x0 > x1 or line_y1 < y0 or line_y0 > block[3]
+            )
+            for span in line.get("spans", []):
+                size = float(span.get("size", 0))
+                if size > 0:
+                    all_sizes.append(size)
+                    if overlaps_block:
+                        block_sizes.append(size)
+                        block_fonts.append(span.get("font", "").lower())
+
+    typical_size = statistics.median(all_sizes) if all_sizes else 0
+    is_larger = bool(block_sizes and typical_size and max(block_sizes) >= typical_size * 1.12)
+    is_emphasized = any("bold" in font or "medi" in font or "semi" in font for font in block_fonts)
+    return text == text.upper() or is_larger or is_emphasized
 
 
 def cluster_columns(blocks, page_width):
@@ -122,16 +174,16 @@ def ordered_blocks(page):
     blocks = [
         block for block in blocks
         if not (
-            (block[1] < page.rect.height * 0.1 and not REFERENCE_HEADING_RE.match(block[4]) and not has_inline_reference_start(block[4]))
+            (block[1] < page.rect.height * 0.06 and not REFERENCE_HEADING_RE.match(block[4]) and not has_inline_reference_start(block[4]))
             or block[1] > page.rect.height * 0.94
         )
     ]
 
     reference_heading = next((block for block in blocks if REFERENCE_HEADING_RE.match(block[4])), None)
-    if reference_heading and reference_heading[0] > page.rect.width * 0.35:
+    margin = 24
+    right_column_x0 = page.rect.width / 2 - margin
+    if reference_heading and reference_heading[0] >= right_column_x0:
         heading_y0 = reference_heading[1]
-        margin = 24
-        right_column_x0 = page.rect.width / 2 - margin
         blocks = [
             block for block in blocks
             if block[1] < heading_y0 or block[0] >= right_column_x0
@@ -154,7 +206,7 @@ def ordered_lines(page):
             if re.fullmatch(r"\d{1,4}", text):
                 continue
             if (
-                (y0 < page.rect.height * 0.1 and not REFERENCE_HEADING_RE.match(text))
+                (y0 < page.rect.height * 0.06 and not REFERENCE_HEADING_RE.match(text))
                 or y0 > page.rect.height * 0.94
             ):
                 continue
@@ -227,6 +279,9 @@ def build_reference_groups(blocks, heading_seen=False):
                 in_references = True
             continue
 
+        if normalized == SECTION_BOUNDARY_MARKER:
+            break
+
         if SECTION_STOP_RE.match(normalized):
             break
 
@@ -265,9 +320,17 @@ def build_unnumbered_reference_groups(doc):
 
     for page_index in range(heading_page_index, len(doc)):
         page = doc[page_index]
+        page_blocks = ordered_blocks(page)
+        boundary_positions = [
+            block[1] for block in page_blocks
+            if page_index > heading_page_index and is_structural_section_heading(page, block)
+        ]
+        boundary_y = min(boundary_positions) if boundary_positions else None
         columns = lines_by_column(ordered_lines(page), page.rect.width)
 
         for column in columns:
+            if boundary_y is not None:
+                column = [line for line in column if line[1] < boundary_y]
             if page_index == heading_page_index:
                 heading_x0, heading_y0 = heading_line[0], heading_line[1]
                 same_column = abs(column[0][0] - heading_x0) < page.rect.width * 0.2
@@ -290,6 +353,9 @@ def build_unnumbered_reference_groups(doc):
                     current_group = [text]
                 else:
                     current_group.append(text)
+
+        if boundary_y is not None:
+            break
 
     if current_group:
         reference_groups.append(repair_line_wrapping(" ".join(current_group)))
@@ -355,7 +421,11 @@ def extract_document_text(pdf_path):
     doc = fitz.open(pdf_path)
     all_blocks = []
     for page in doc:
-        all_blocks.extend(ordered_blocks(page))
+        page_blocks = ordered_blocks(page)
+        for block in page_blocks:
+            if is_structural_section_heading(page, block):
+                all_blocks.append((block[0], block[1], block[2], block[3], SECTION_BOUNDARY_MARKER))
+            all_blocks.append(block)
 
     unnumbered_references = False
     document_references = build_reference_groups(all_blocks)

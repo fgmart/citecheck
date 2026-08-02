@@ -35,6 +35,12 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.8 2026-08-02
+- preserve centered single-column bibliographies and reference continuations near the top of a new page
+- parse numbered trailing-year bibliography entries, including conference and volume/issue/page fields
+- repair unambiguous PDF mojibake in names and numeric page ranges
+- stop bibliography extraction at structurally distinct section headings using page position, alignment, and typography
+
 ## 3.7 2026-08-02
 - compare author and venue candidates with their extracted citation fields so exact matches are not diluted by unrelated citation text
 

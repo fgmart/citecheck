@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.7';
+const ENGINE_VERSION = 'citecheck-v3.8';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -20,6 +20,7 @@ const ARXIV_TIMEOUT_MS = Number(process.env.ARXIV_TIMEOUT_MS || 10000);
 const ARXIV_CACHE_TTL_MS = Number(process.env.ARXIV_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const ARXIV_CACHE_MAX_ENTRIES = Number(process.env.ARXIV_CACHE_MAX_ENTRIES || 500);
 const REFERENCE_HEADING_RE = /^(?:(?:acknowledgments?|acknowledgements?)\s+)?(?:references|bibliography)$/i;
+const SECTION_STOP_RE = /^(?:abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b/i;
 let nextCrossrefRequestAt = 0;
 let nextArxivRequestAt = 0;
 let arxivRequestQueue = Promise.resolve();
@@ -114,10 +115,26 @@ function looksLikeAuthorDateReferenceStart(line) {
   return /^[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+){0,3},\s+.+\((?:19|20)\d{2}(?:[,;)])/.test(line);
 }
 
+function looksLikeStandaloneSectionHeading(line) {
+  const normalized = normalizeText(line || '');
+  const letters = normalized.replace(/[^A-Za-z]/g, '');
+  return letters.length >= 4
+    && normalized.length <= 80
+    && normalized.split(/\s+/).length <= 10
+    && normalized === normalized.toUpperCase()
+    && /^[A-Z][A-Z0-9 &:'’\-]*$/.test(normalized);
+}
+
+function isSectionStopLine(line) {
+  return SECTION_STOP_RE.test(line) || looksLikeStandaloneSectionHeading(line);
+}
+
 function extractReferencesFromText(text, debugSink = null) {
   const lines = text.split(/\r?\n/);
   const referenceHeadingIndex = lines.findIndex((line) => REFERENCE_HEADING_RE.test(line.trim()));
-  const sectionLines = referenceHeadingIndex >= 0 ? lines.slice(referenceHeadingIndex + 1) : lines;
+  const unboundedSectionLines = referenceHeadingIndex >= 0 ? lines.slice(referenceHeadingIndex + 1) : lines;
+  const sectionStopIndex = unboundedSectionLines.findIndex((line) => isSectionStopLine(line.trim()));
+  const sectionLines = sectionStopIndex >= 0 ? unboundedSectionLines.slice(0, sectionStopIndex) : unboundedSectionLines;
   const sectionText = repairDoiWrapping(sectionLines.join('\n').trim());
 
   const emitDebug = (message, detail) => {
@@ -232,7 +249,7 @@ function extractReferencesFromText(text, debugSink = null) {
       continue;
     }
 
-    if (/^(abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)/i.test(line)) {
+    if (isSectionStopLine(line)) {
       break;
     } else if (current) {
       current += ` ${line}`;
@@ -298,6 +315,8 @@ function findQuotedTitle(reference) {
   if (!match) return null;
   const beforeQuote = withoutMarker.slice(0, match.index);
   if (/\b(?:19|20)\d{2}\b/.test(beforeQuote)) return null;
+  const afterQuote = withoutMarker.slice(match.index + match[0].length);
+  if (/^\s*:/.test(afterQuote)) return null;
   return {
     title: normalizeText(match[1]).replace(/[,;:\s]+$/g, ''),
     start: match.index,
@@ -307,6 +326,9 @@ function findQuotedTitle(reference) {
 }
 
 function extractTitleCandidate(reference) {
+  const trailingYearMetadata = parseTrailingYearReference(reference);
+  if (trailingYearMetadata) return trailingYearMetadata.title;
+
   const quotedTitle = findQuotedTitle(reference);
   if (quotedTitle) return quotedTitle.title;
 
@@ -343,6 +365,8 @@ function shouldSearchArxiv(reference) {
 }
 
 function extractYear(reference) {
+  const trailingYearMetadata = parseTrailingYearReference(reference);
+  if (trailingYearMetadata) return Number(trailingYearMetadata.date);
   const match = reference.match(/\b(19|20)\d{2}\b/);
   return match ? Number(match[0]) : null;
 }
@@ -358,7 +382,65 @@ function cleanReferenceForMetadata(reference) {
     .trim();
 }
 
+function findNonInitialSentenceBoundary(text, allowQuestionMark = false) {
+  const punctuation = allowQuestionMark ? /[.?]/g : /\./g;
+  for (const match of text.matchAll(punctuation)) {
+    const index = match.index;
+    const after = text.slice(index + 1);
+    if (!/^\s+/.test(after)) continue;
+    if (match[0] === '?' && !/^(?:In\s+|Proceedings\b|[A-Z][^.!?]+,\s*\d+[A-Za-z]?\s*\()/i.test(after.trimStart())) continue;
+    if (match[0] === '.' && /(?:^|\s)[A-Z]$/.test(text.slice(0, index))) continue;
+    return { index, punctuation: match[0], end: index + 1 + after.match(/^\s+/)[0].length };
+  }
+  return null;
+}
+
+function parseTrailingYearReference(reference) {
+  if (findQuotedTitle(reference)) return null;
+  const cleaned = cleanReferenceForMetadata(reference);
+  const authorBoundary = findNonInitialSentenceBoundary(cleaned);
+  if (!authorBoundary) return null;
+
+  const authors = cleaned.slice(0, authorBoundary.index).trim();
+  const remainder = cleaned.slice(authorBoundary.end).trim();
+  if (!authors || !remainder || /^(?:19|20)\d{2}\b/.test(remainder)) return null;
+
+  const titleBoundary = findNonInitialSentenceBoundary(remainder, true);
+  if (!titleBoundary) return null;
+
+  const title = remainder.slice(0, titleBoundary.index + (titleBoundary.punctuation === '?' ? 1 : 0)).trim();
+  const publication = remainder.slice(titleBoundary.end).trim();
+  const yearMatches = Array.from(publication.matchAll(/\b(?:19|20)\d{2}\b/g));
+  if (!title || !publication || !yearMatches.length) return null;
+
+  const date = yearMatches[yearMatches.length - 1][0];
+  const pageMatch = publication.match(/\bpages?\s+([A-Za-z]?\d+\s*[–—-]\s*[A-Za-z]?\d+|\d+)/i);
+  let venue = '';
+  let volume = '';
+  let issue = '';
+  let pages = pageMatch ? pageMatch[1].replace(/\s*([–—-])\s*/g, '$1').trim() : '';
+
+  const journalMatch = publication.match(/^(.+?),\s*(\d+[A-Za-z]?)\s*\(([^)]+)\)(?:\s*:\s*([^,.;]+))?/);
+  if (journalMatch) {
+    venue = journalMatch[1].trim();
+    volume = journalMatch[2].trim();
+    issue = journalMatch[3].trim();
+    if (!pages && journalMatch[4]) pages = journalMatch[4].replace(/\s*([–—-])\s*/g, '$1').trim();
+  } else if (/^(?:In\s+)?(?:Proceedings\b|\d{4}\s+IEEE\b)/i.test(publication)) {
+    let conference = publication.replace(/^In\s+/i, '');
+    const pageIndex = conference.search(/,\s*pages?\s+/i);
+    if (pageIndex >= 0) conference = conference.slice(0, pageIndex);
+    else conference = conference.replace(/,\s*[A-Z][^,]+,\s*[A-Z]{2},\s*USA,.*$/i, '');
+    venue = conference.replace(/[,.;\s]+$/g, '').trim();
+  }
+
+  return { authors, date, title, venue, volume, issue, pages };
+}
+
 function extractAuthorsCandidate(reference) {
+  const trailingYearMetadata = parseTrailingYearReference(reference);
+  if (trailingYearMetadata) return trailingYearMetadata.authors;
+
   const cleaned = cleanReferenceForMetadata(reference);
   const quotedTitle = findQuotedTitle(cleaned);
   if (quotedTitle) {
@@ -448,6 +530,16 @@ function extractIeeePublicationDetails(reference) {
 }
 
 function extractPublicationDetails(reference) {
+  const trailingYearMetadata = parseTrailingYearReference(reference);
+  if (trailingYearMetadata) {
+    return {
+      venue: trailingYearMetadata.venue,
+      volume: trailingYearMetadata.volume,
+      issue: trailingYearMetadata.issue,
+      pages: trailingYearMetadata.pages
+    };
+  }
+
   const ieeeDetails = extractIeeePublicationDetails(reference);
   if (ieeeDetails) return ieeeDetails;
 
