@@ -6,15 +6,17 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.1';
+const ENGINE_VERSION = 'citecheck-v3.6';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
 const CROSSREF_RETRIES = Number(process.env.CROSSREF_RETRIES || 4);
 const CROSSREF_MIN_INTERVAL_MS = Number(process.env.CROSSREF_MIN_INTERVAL_MS || 1500);
+const CROSSREF_TIMEOUT_MS = Number(process.env.CROSSREF_TIMEOUT_MS || 10000);
 const CITECHECK_MAX_REFERENCES = Number(process.env.CITECHECK_MAX_REFERENCES || 100);
 const ARXIV_RETRIES = Number(process.env.ARXIV_RETRIES || 3);
 const ARXIV_MIN_INTERVAL_MS = Number(process.env.ARXIV_MIN_INTERVAL_MS || 3000);
+const ARXIV_TIMEOUT_MS = Number(process.env.ARXIV_TIMEOUT_MS || 10000);
 const ARXIV_CACHE_TTL_MS = Number(process.env.ARXIV_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const ARXIV_CACHE_MAX_ENTRIES = Number(process.env.ARXIV_CACHE_MAX_ENTRIES || 500);
 const REFERENCE_HEADING_RE = /^(?:(?:acknowledgments?|acknowledgements?)\s+)?(?:references|bibliography)$/i;
@@ -328,6 +330,18 @@ function extractTitleCandidate(reference) {
   return titleCandidate || titleSource.replace(/^[.\s]+/, '').slice(0, 160);
 }
 
+function shouldSearchArxiv(reference) {
+  if (extractArxivIdentifier(reference)) return true;
+  if (/\[\s*n\s*\.\s*d\s*\.\s*\]/i.test(reference)) return false;
+  if (/\bretrieved\b[\s\S]*\bfrom\s+https?:\/\//i.test(reference)) return false;
+
+  const metadata = extractReferenceMetadata(reference);
+  if (metadata.venue || metadata.pages || metadata.volume || metadata.issue) return false;
+
+  const title = extractTitleCandidate(reference);
+  return Boolean(extractYear(reference) && title && title.split(/\s+/).filter(Boolean).length >= 4);
+}
+
 function extractYear(reference) {
   const match = reference.match(/\b(19|20)\d{2}\b/);
   return match ? Number(match[0]) : null;
@@ -455,6 +469,16 @@ function extractPublicationDetails(reference) {
   }
 
   const dateParenthetical = "\\([^)]*(?:19|20)\\d{2}[^)]*\\)";
+  const missingVenueWithIssue = afterTitle.match(new RegExp(`^(\\d+[A-Za-z]?),\\s*([A-Za-z0-9-]+)\\s*${dateParenthetical},\\s*([^.;]+(?:[–—-][^.;]+)?)`));
+  if (missingVenueWithIssue) {
+    return {
+      venue: '',
+      volume: missingVenueWithIssue[1].trim(),
+      issue: missingVenueWithIssue[2].trim(),
+      pages: missingVenueWithIssue[3].trim()
+    };
+  }
+
   const journalWithIssue = afterTitle.match(new RegExp(`^(.+?)\\s+(\\d+[A-Za-z]?),\\s*([A-Za-z0-9-]+)\\s*${dateParenthetical},\\s*([^.;]+(?:[–—-][^.;]+)?)`));
   if (journalWithIssue) {
     return {
@@ -482,6 +506,16 @@ function extractPublicationDetails(reference) {
       volume: articleDetails[2].trim(),
       issue: articleDetails[3].trim(),
       pages: `${articleDetails[4].trim()}, ${articleDetails[5].trim()}`
+    };
+  }
+
+  const venueWithTrailingPages = afterTitle.match(/^([^.]+?),\s*(\d+\s*[–—-]\s*\d+)[.;\s]*$/);
+  if (venueWithTrailingPages) {
+    return {
+      venue: venueWithTrailingPages[1].replace(/^\s*In\s+/i, '').trim(),
+      volume: '',
+      issue: '',
+      pages: venueWithTrailingPages[2].trim()
     };
   }
 
@@ -666,13 +700,18 @@ function formatCrossrefAuthor(author = {}) {
 
 function normalizeCrossrefWork(work = {}) {
   const authors = Array.isArray(work.author)
-    ? work.author.map(formatCrossrefAuthor).filter(Boolean).slice(0, 8).join(', ')
+    ? work.author.map(formatCrossrefAuthor).filter(Boolean).join(', ')
     : '';
+  const title = Array.isArray(work.title) ? work.title[0] : work.title || '';
+  const subtitle = Array.isArray(work.subtitle) ? work.subtitle[0] : work.subtitle || '';
+  const fullTitle = title && subtitle && !title.toLowerCase().includes(subtitle.toLowerCase())
+    ? `${title.replace(/[:\s]+$/g, '')}: ${subtitle}`
+    : title || subtitle;
 
   return {
     source: 'crossref',
     doi: normalizeDoi(work.DOI || work.doi || ''),
-    title: Array.isArray(work.title) ? work.title[0] : work.title || '',
+    title: fullTitle,
     authors,
     containerTitle: Array.isArray(work['container-title']) ? work['container-title'][0] : work['container-title'] || '',
     year: getCrossrefYear(work),
@@ -774,6 +813,10 @@ function isRetriableStatus(status) {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function isRetriableArxivStatus(status) {
+  return status !== 429 && isRetriableStatus(status);
+}
+
 function getRetryDelay(attempt, response) {
   const retryAfter = response && response.headers ? response.headers.get('retry-after') : null;
   const retryAfterSeconds = retryAfter && Number(retryAfter);
@@ -793,8 +836,28 @@ async function waitForCrossrefSlot(now = Date.now()) {
   if (delay > 0) await sleep(delay);
 }
 
+function fetchWithTimeout(url, fetchOptions = {}, timeoutMs, source, fetchImpl = global.fetch) {
+  const controller = new AbortController();
+  const timeoutError = new Error(`${source} request timed out after ${timeoutMs} ms`);
+  timeoutError.code = 'ETIMEDOUT';
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+  const requestPromise = Promise.resolve().then(() => fetchImpl(url, {
+    ...fetchOptions,
+    signal: controller.signal
+  }));
+
+  return Promise.race([requestPromise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+}
+
 async function fetchJson(url, options = {}) {
   const retries = options.retries ?? CROSSREF_RETRIES;
+  const timeoutMs = options.timeoutMs ?? CROSSREF_TIMEOUT_MS;
   let lastError = null;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -802,11 +865,11 @@ async function fetchJson(url, options = {}) {
 
     try {
       await waitForCrossrefSlot();
-      response = await fetch(url, {
+      response = await fetchWithTimeout(url, {
         headers: {
           'User-Agent': `${ENGINE_VERSION}${CROSSREF_MAILTO ? ` (mailto:${CROSSREF_MAILTO})` : ''}`
         }
-      });
+      }, timeoutMs, 'Crossref');
 
       if (response.ok) return response.json();
 
@@ -815,7 +878,7 @@ async function fetchJson(url, options = {}) {
       if (!isRetriableStatus(response.status) || attempt === retries) break;
     } catch (error) {
       lastError = error;
-      if (attempt === retries) break;
+      if (error.code === 'ETIMEDOUT' || attempt === retries) break;
     }
 
     await sleep(getRetryDelay(attempt, response));
@@ -839,6 +902,7 @@ function scheduleArxivRequest(task) {
 
 async function fetchArxivText(url, options = {}) {
   const retries = options.retries ?? ARXIV_RETRIES;
+  const timeoutMs = options.timeoutMs ?? ARXIV_TIMEOUT_MS;
   return scheduleArxivRequest(async () => {
     let lastError = null;
 
@@ -846,19 +910,19 @@ async function fetchArxivText(url, options = {}) {
       let response = null;
       try {
         await waitForArxivSlot();
-        response = await fetch(url, {
+        response = await fetchWithTimeout(url, {
           headers: {
             'User-Agent': `${ENGINE_VERSION}${CROSSREF_MAILTO ? ` (mailto:${CROSSREF_MAILTO})` : ''}`
           }
-        });
+        }, timeoutMs, 'arXiv');
         if (response.ok) return response.text();
 
         lastError = new Error(`arXiv request failed with status ${response.status}`);
         lastError.status = response.status;
-        if (!isRetriableStatus(response.status) || attempt === retries) break;
+        if (!isRetriableArxivStatus(response.status) || attempt === retries) break;
       } catch (error) {
         lastError = error;
-        if (attempt === retries) break;
+        if (error.code === 'ETIMEDOUT' || attempt === retries) break;
       }
 
       await sleep(getRetryDelay(attempt, response));
@@ -964,6 +1028,10 @@ function rankCandidates(reference, candidates = []) {
       return { ...candidate, match };
     })
     .sort((left, right) => right.match.score - left.match.score);
+}
+
+function isViableSearchCandidate(candidate) {
+  return Boolean(candidate && candidate.match && candidate.match.score >= 0.15);
 }
 
 function describeCandidate(candidate) {
@@ -1080,11 +1148,13 @@ async function analyzeReference(reference, options = {}) {
     try {
       const crossrefSearch = options.searchCrossrefCandidates || searchCrossrefCandidates;
       const ranked = rankCandidates(reference, await crossrefSearch(reference));
-      const best = ranked[0];
-      const second = ranked[1];
+      const viable = ranked.filter(isViableSearchCandidate);
+      const best = viable[0];
+      const second = viable[1];
       let usedArxivFallback = false;
 
-      if (!best || best.match.confidence === 'low') {
+      const arxivEligible = shouldSearchArxiv(reference);
+      if ((!best || best.match.confidence === 'low') && arxivEligible) {
         try {
           const arxivSearch = options.searchArxivCandidates || searchArxivCandidates;
           const arxivRanked = rankCandidates(reference, await arxivSearch(reference));
@@ -1142,9 +1212,13 @@ async function analyzeReference(reference, options = {}) {
         }
       } else if (!best && !usedArxivFallback) {
         confidence = 'low';
-        summary = 'No viable record was found in Crossref or arXiv.';
+        summary = arxivEligible
+          ? 'No viable record was found in Crossref or arXiv.'
+          : 'No viable record was found in Crossref; arXiv fallback was not applicable to this citation.';
         recommendations = ['Add a DOI, arXiv identifier, or stable URL and verify the citation manually.'];
-        if (!evidence.length) evidence = ['Crossref returned no candidates', 'arXiv returned no viable candidates'];
+        if (!evidence.length) evidence = arxivEligible
+          ? ['Crossref returned no candidates', 'arXiv returned no viable candidates']
+          : ['Crossref returned no candidates', 'arXiv fallback was not applicable to this citation'];
       }
     } catch (error) {
       matchedSource = 'crossref';
@@ -1305,6 +1379,7 @@ async function handleAnalyze(req, res) {
     const arxivIdentifiers = references.map(extractArxivIdentifier).filter(Boolean);
     let arxivCandidates = new Map();
     let arxivLookupError = null;
+    let arxivBatchAttempted = false;
 
     res.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -1312,19 +1387,19 @@ async function handleAnalyze(req, res) {
     });
     writeAnalyzeEvent(res, 'references-found', { total: references.length });
 
-    if (arxivIdentifiers.length) {
-      try {
-        arxivCandidates = await fetchArxivEntriesByIds(arxivIdentifiers);
-      } catch (error) {
-        arxivLookupError = error;
-      }
-    }
-
     for (let index = 0; index < references.length; index += 1) {
       writeAnalyzeEvent(res, 'checking-reference', {
         index: index + 1,
         total: references.length
       });
+      if (!arxivBatchAttempted && arxivIdentifiers.length && extractArxivIdentifier(references[index])) {
+        arxivBatchAttempted = true;
+        try {
+          arxivCandidates = await fetchArxivEntriesByIds(arxivIdentifiers);
+        } catch (error) {
+          arxivLookupError = error;
+        }
+      }
       analyzed[index] = await analyzeReference(references[index], {
         arxivCandidates,
         arxivLookupError
@@ -1434,6 +1509,10 @@ module.exports = {
   extractYear,
   extractDoi,
   extractArxivIdentifier,
+  shouldSearchArxiv,
+  fetchWithTimeout,
+  isRetriableArxivStatus,
+  isViableSearchCandidate,
   fetchArxivEntriesByIds,
   searchArxivCandidates,
   repairDoiWrapping

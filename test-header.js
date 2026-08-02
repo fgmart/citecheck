@@ -18,6 +18,10 @@ const {
   extractReferenceMetadata,
   extractDoi,
   extractArxivIdentifier,
+  shouldSearchArxiv,
+  fetchWithTimeout,
+  isRetriableArxivStatus,
+  isViableSearchCandidate,
   fetchArxivEntriesByIds,
   repairDoiWrapping
 } = require('./server');
@@ -182,10 +186,22 @@ assert.strictEqual(twoWordTitleMetadata.volume, '49');
 assert.strictEqual(twoWordTitleMetadata.issue, '3');
 assert.strictEqual(twoWordTitleMetadata.pages, '33–35');
 
+const omittedVenueMetadata = extractReferenceMetadata('[2] Avery Fixture, Blair Sample, and Casey Harness. 2026. Evaluating Synthetic Citation Parsers. 10, 1 (2026), 29.');
+assert.strictEqual(omittedVenueMetadata.title, 'Evaluating Synthetic Citation Parsers');
+assert.strictEqual(omittedVenueMetadata.venue, '');
+assert.strictEqual(omittedVenueMetadata.volume, '10');
+assert.strictEqual(omittedVenueMetadata.issue, '1');
+assert.strictEqual(omittedVenueMetadata.pages, '29');
+
 const editedBookChapterMetadata = extractReferenceMetadata('[10] Avery Fixture and Blair Sample. 2011. Developing reliable synthetic parsers. In Handbook of Research on Structured Test Records. Fixture Press, 58–64.');
 assert.strictEqual(editedBookChapterMetadata.title, 'Developing reliable synthetic parsers');
 assert.strictEqual(editedBookChapterMetadata.venue, 'Handbook of Research on Structured Test Records');
 assert.strictEqual(editedBookChapterMetadata.pages, '58–64');
+
+const publisherWithPagesMetadata = extractReferenceMetadata('[4] Avery Fixture, Blair Sample, and Casey Harness. 2026. Testing a Fixture-based Metadata Assessment Rubric. Association for the Advancement of Synthetic Education (AASE), 3833–3840.');
+assert.strictEqual(publisherWithPagesMetadata.title, 'Testing a Fixture-based Metadata Assessment Rubric');
+assert.strictEqual(publisherWithPagesMetadata.venue, 'Association for the Advancement of Synthetic Education (AASE)');
+assert.strictEqual(publisherWithPagesMetadata.pages, '3833–3840');
 
 const embeddedTitleQuoteMetadata = extractReferenceMetadata('[1] Avery Fixture. 2010. Why “Fixtures” Matter: A Framework for Reliable Parser Evaluation. Review of Synthetic Systems 14, 2 (2010), 105–112. doi:10.1000/fixture.2010.001');
 assert.strictEqual(embeddedTitleQuoteMetadata.authors, 'Avery Fixture');
@@ -345,6 +361,19 @@ assert.strictEqual(normalizedWork.issue, '3');
 assert.strictEqual(normalizedWork.pages, '45-67');
 assert.strictEqual(normalizeDoi('10.1000/ABC.'), '10.1000/abc');
 
+const subtitleAndFullAuthorsWork = normalizeCrossrefWork({
+  DOI: '10.1000/full-metadata',
+  title: ['FixtureAI'],
+  subtitle: ['Evaluating Complete Synthetic Metadata'],
+  author: Array.from({ length: 9 }, (unused, index) => ({
+    given: `Author${index + 1}`,
+    family: `Fixture${index + 1}`
+  }))
+});
+assert.strictEqual(subtitleAndFullAuthorsWork.title, 'FixtureAI: Evaluating Complete Synthetic Metadata');
+assert.ok(subtitleAndFullAuthorsWork.authors.includes('Author9 Fixture9'));
+assert.strictEqual(subtitleAndFullAuthorsWork.authors.split(', ').length, 9);
+
 const printYearWork = normalizeCrossrefWork({
   DOI: '10.1000/print-year',
   title: ['Choosing the Print Year for a Synthetic Online-First Article'],
@@ -398,6 +427,68 @@ assert.strictEqual(confidenceForLookupError({ status: 429 }), 'medium');
 assert.strictEqual(confidenceForLookupError(new Error('network timeout')), 'medium');
 
 async function runAsyncTests() {
+  await assert.rejects(
+    fetchWithTimeout(
+      'https://example.invalid/hanging-request',
+      {},
+      5,
+      'Synthetic API',
+      async () => new Promise(() => {})
+    ),
+    (error) => error.code === 'ETIMEDOUT' && error.message.includes('Synthetic API request timed out')
+  );
+
+  assert.strictEqual(
+    shouldSearchArxiv('[2] Taylor Fixture. [n. d.]. Synthetic project page. Retrieved August 1, 2026 from https://example.invalid/project'),
+    false
+  );
+  assert.strictEqual(
+    shouldSearchArxiv('[2] Taylor Fixture. 2026. A Synthetic Study of Parser Reliability.'),
+    true
+  );
+  assert.strictEqual(
+    shouldSearchArxiv('[4] Taylor Fixture and Morgan Sample. 2026. A Published Synthetic Study. Fixture Education Association, 101–108.'),
+    false
+  );
+assert.strictEqual(isRetriableArxivStatus(429), false);
+assert.strictEqual(isRetriableArxivStatus(503), true);
+assert.strictEqual(isViableSearchCandidate({ match: { score: 0 } }), false);
+assert.strictEqual(isViableSearchCandidate({ match: { score: 0.15 } }), true);
+  let webArxivFallbackCalls = 0;
+  const webReferenceMatch = await analyzeReference('[2] Taylor Fixture. [n. d.]. Synthetic project page. Retrieved August 1, 2026 from https://example.invalid/project', {
+    searchCrossrefCandidates: async () => [],
+    searchArxivCandidates: async () => {
+      webArxivFallbackCalls += 1;
+      return [];
+    }
+  });
+  assert.strictEqual(webArxivFallbackCalls, 0);
+  assert.ok(webReferenceMatch.summary.includes('arXiv fallback was not applicable'));
+  let publishedArxivFallbackCalls = 0;
+  await analyzeReference('[4] Taylor Fixture and Morgan Sample. 2026. A Published Synthetic Study. Fixture Education Association, 101–108.', {
+    searchCrossrefCandidates: async () => [],
+    searchArxivCandidates: async () => {
+      publishedArxivFallbackCalls += 1;
+      return [];
+    }
+  });
+  assert.strictEqual(publishedArxivFallbackCalls, 0);
+  const unrelatedCandidateMatch = await analyzeReference('[4] Avery Fixture, Blair Sample, and Casey Harness. 2026. Testing a Fixture-based Metadata Assessment Rubric. Association for the Advancement of Synthetic Education (AASE), 3833–3840.', {
+    searchCrossrefCandidates: async () => [{
+      title: 'An Unrelated Study of Different Systems',
+      containerTitle: 'Journal of Unrelated Examples',
+      authors: 'Morgan Placeholder',
+      year: 2018,
+      doi: '10.1000/unrelated.fixture'
+    }],
+    searchArxivCandidates: async () => {
+      throw new Error('Published citation should not use arXiv fallback');
+    }
+  });
+  assert.strictEqual(unrelatedCandidateMatch.source, null);
+  assert.strictEqual(unrelatedCandidateMatch.doi, null);
+  assert.strictEqual(unrelatedCandidateMatch.metadata.matched.title, '');
+
   let active = 0;
   let maxActive = 0;
   const mapped = await mapWithConcurrency([1, 2, 3, 4], 2, async (value) => {

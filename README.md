@@ -35,6 +35,26 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.6 2026-08-01
+- combine Crossref title and subtitle fields when presenting and matching publication titles
+- preserve complete Crossref author lists instead of truncating them after eight authors
+
+## 3.5 2026-08-01
+- correctly align volume, issue, and article/page fields when a citation omits its publication venue
+
+## 3.4 2026-08-01
+- preserve complete publisher or association venue names followed directly by a page range
+- reject zero-overlap Crossref search results instead of displaying unrelated metadata and DOI values
+
+## 3.3 2026-08-01
+- avoid arXiv fallback searches for clearly published citations with venue, page, volume, or issue metadata
+- fail fast when arXiv reports rate limiting instead of applying a long retry backoff
+
+## 3.2 2026-08-01
+- bound Crossref and arXiv requests with timeouts so an unresponsive API cannot stall an analysis indefinitely
+- defer batched arXiv lookup until the first arXiv citation so earlier references can report progress
+- skip irrelevant arXiv fallback searches for undated, retrieved web resources
+
 ## 3.1 2026-08-01
 - distinguish words such as `Processes` from proceedings abbreviations during title extraction
 - preserve ACM proceedings volume and acronym text while excluding event dates and locations
