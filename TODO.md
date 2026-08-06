@@ -1,0 +1,2 @@
+- prefer Crossref over arXiv so as to find publications that postdate arXiv entries
+- give formatted BibTex material to copy out of corrected reference

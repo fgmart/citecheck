@@ -3,6 +3,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const {
   extractReferencesFromText,
+  cleanExtractedText,
+  reorderTextForColumns,
   stripPageHeaders,
   buildAnalyzeResponse,
   looksLikeExtractedReferences,
@@ -118,6 +120,10 @@ const pythonSingleColumnBibliographyRegression = spawnSync(
     'section_blocks = ordered_blocks(section_page)',
     'assert any(is_structural_section_heading(section_page, block) for block in section_blocks), section_blocks',
     'assert repair_line_wrapping("Avery Fixture- Sample") == "Avery Fixture-Sample"',
+    'duplicate_doi = repair_line_wrapping("Synthetic Journal, 2026. doi: 10.1000/fixture.2026.7. URL https://doi.org/ 10.1000/fixture.2026.7")',
+    'assert "fixture.2026.7. URL https://doi.org/10.1000/fixture.2026.7" in duplicate_doi, duplicate_doi',
+    'assert "URLhttps" not in duplicate_doi, duplicate_doi',
+    'assert repair_line_wrapping("doi: 10.1000/fixture. 2026") == "doi: 10.1000/fixture.2026"',
   ].join('\n')],
   { cwd: __dirname, encoding: 'utf8' }
 );
@@ -157,6 +163,57 @@ const pythonFlushLeftAuthorDateRegression = spawnSync(
 );
 assert.strictEqual(pythonFlushLeftAuthorDateRegression.status, 0, pythonFlushLeftAuthorDateRegression.stderr);
 
+const pythonTrailingYearAppendixRegression = spawnSync(
+  path.join(__dirname, '.venv', 'bin', 'python'),
+  ['-c', [
+    'import fitz',
+    'from scripts.extract_pdf_text import extract_document_text',
+    'doc = fitz.open()',
+    'refs = doc.new_page(width=612, height=792)',
+    'refs.insert_text((72, 70), "References", fontsize=18)',
+    'refs.insert_text((72, 110), "Avery Fixture and Blair Sample. A synthetic trailing-year article.", fontsize=10)',
+    'doi_prefix = "Journal of Fixture Records, 4(2):10-19, 2024. doi: 10.1000/"',
+    'refs.insert_text((82, 124), doi_prefix, fontsize=10)',
+    'suffix_x = 82 + fitz.get_text_length(doi_prefix, fontsize=10) + 8',
+    'refs.insert_text((suffix_x, 124), "fixture.2024.1.", fontsize=10)',
+    'refs.insert_text((72, 165), "Casey Harness. Another synthetic citation without a parenthesized year.", fontsize=10)',
+    'refs.insert_text((82, 179), "In Proceedings of the Fixture Evaluation Conference, pp. 20-29, 2025.", fontsize=10)',
+    'continued = doc.new_page(width=612, height=792)',
+    'continued.insert_text((72, 70), "Drew Runner and Emery Example. A multipage synthetic bibliography record.", fontsize=10)',
+    'continued.insert_text((82, 84), "Synthetic Parsing Review, 8(1):30-39, 2026.", fontsize=10)',
+    'appendix = doc.new_page(width=612, height=792)',
+    'appendix.insert_text((72, 70), "A Appendix", fontsize=14)',
+    'appendix.insert_text((72, 110), "1. Icon. A numbered appendix definition, not a citation.", fontsize=10)',
+    'appendix.insert_text((72, 135), "2. Text. Another numbered appendix definition.", fontsize=10)',
+    'appendix.insert_text((72, 160), "3. Button. A third numbered appendix definition.", fontsize=10)',
+    'pdf_path = "/tmp/citecheck-trailing-year-appendix-regression.pdf"',
+    'doc.save(pdf_path)',
+    'groups = extract_document_text(pdf_path).split("\\n\\n")',
+    'assert len(groups) == 3, groups',
+    'assert groups[0].startswith("Avery Fixture"), groups',
+    'assert "10.1000/fixture.2024.1" in groups[0], groups',
+    'assert groups[2].startswith("Drew Runner"), groups',
+    'assert not any("numbered appendix" in group.lower() for group in groups), groups',
+    'print("\\n\\n".join(groups))',
+  ].join('\n')],
+  { cwd: __dirname, encoding: 'utf8' }
+);
+assert.strictEqual(pythonTrailingYearAppendixRegression.status, 0, pythonTrailingYearAppendixRegression.stderr);
+
+const trailingYearPdfCleaned = cleanExtractedText(pythonTrailingYearAppendixRegression.stdout);
+const trailingYearPdfWithoutHeaders = stripPageHeaders(trailingYearPdfCleaned);
+const trailingYearPdfProcessed = looksLikeExtractedReferences(trailingYearPdfWithoutHeaders)
+  ? trailingYearPdfWithoutHeaders
+  : reorderTextForColumns(trailingYearPdfWithoutHeaders);
+const trailingYearPdfReferences = extractReferencesFromText(trailingYearPdfProcessed);
+assert.strictEqual(trailingYearPdfReferences.length, 3, trailingYearPdfReferences);
+assert.ok(trailingYearPdfReferences[0].startsWith('Avery Fixture'));
+assert.ok(trailingYearPdfReferences[0].includes('10.1000/fixture.2024.1'));
+assert.ok(trailingYearPdfReferences[2].startsWith('Drew Runner'));
+assert.ok(!trailingYearPdfReferences.some((reference) => reference.toLowerCase().includes('numbered appendix')));
+assert.ok(trailingYearPdfReferences[0].endsWith('10.1000/fixture.2024.1.'));
+assert.ok(trailingYearPdfReferences[1].startsWith('Casey Harness'));
+
 const longBlockSample = `References [15] First citation text that should be its own reference. [16] Second citation text that should also be its own reference. [2] Third citation text that should be separated too.`;
 const longBlockRefs = extractReferencesFromText(longBlockSample);
 assert.strictEqual(longBlockRefs.length, 3);
@@ -183,6 +240,12 @@ assert.ok(wrappedDoiRefs[0].includes('doi:10.1000/example.10001'));
 assert.ok(wrappedDoiRefs[1].includes('doi:10.1000/example.10002'));
 assert.ok(wrappedDoiRefs[2].includes('https://doi.org/10.1000/example.10003'));
 assert.strictEqual(repairDoiWrapping('doi:10. 1000/example.10002'), 'doi:10.1000/example.10002');
+const duplicateDoiForms = repairDoiWrapping('doi: 10.1000/fixture.2026.7. URL https://doi.org/ 10.1000/fixture.2026.7');
+assert.strictEqual(
+  duplicateDoiForms,
+  'doi: 10.1000/fixture.2026.7. URL https://doi.org/10.1000/fixture.2026.7'
+);
+assert.strictEqual(extractDoi(duplicateDoiForms), '10.1000/fixture.2026.7');
 assert.strictEqual(
   extractDoi('[4] Jordan Fixture. 2026. A Synthetic Preprint. arXiv:2601.12345v2 [cs.EX] https://arxiv.org/abs/2601.12345'),
   '10.48550/arxiv.2601.12345'
@@ -388,6 +451,22 @@ assert.strictEqual(trailingYearConferenceMetadata.title, 'Comparing synthetic pa
 assert.strictEqual(trailingYearConferenceMetadata.venue, 'Proceedings of the 2019 Conference on Synthetic Citation Testing, TEST ’19');
 assert.strictEqual(trailingYearConferenceMetadata.pages, '395–401');
 
+const ordinalConferenceMetadata = extractReferenceMetadata('Avery Fixture, Blair Sample, and Casey Harness. Evaluating synthetic mobile parser interfaces. In 22nd International conference on fixture interaction with sample devices and services, pp. 1–12, 2020.');
+assert.strictEqual(ordinalConferenceMetadata.title, 'Evaluating synthetic mobile parser interfaces');
+assert.strictEqual(ordinalConferenceMetadata.venue, '22nd International conference on fixture interaction with sample devices and services');
+assert.strictEqual(ordinalConferenceMetadata.pages, '1–12');
+
+const editedProceedingsMetadata = extractReferenceMetadata('Avery Fixture, Blair Sample, and Casey Harness. Grounding synthetic parser evaluations with structured records. In Drew Editor, Emery Sample, and Finley Mock (eds.), Findings of the Association for Fixture Parsing: TEST 2025, pp. 12807–12833, Sampleton, TS, July 2025. Association for Fixture Parsing.');
+assert.strictEqual(editedProceedingsMetadata.title, 'Grounding synthetic parser evaluations with structured records');
+assert.strictEqual(editedProceedingsMetadata.venue, 'Findings of the Association for Fixture Parsing: TEST 2025');
+assert.strictEqual(editedProceedingsMetadata.pages, '12807–12833');
+
+const trailingYearArxivMetadata = extractReferenceMetadata('Avery Fixture, Blair Sample, Casey Harness, et al. Training synthetic parsers with structured preprint records. arXiv preprint arXiv:2603.01234, 2026.');
+assert.strictEqual(trailingYearArxivMetadata.authors, 'Avery Fixture, Blair Sample, Casey Harness, et al.');
+assert.strictEqual(trailingYearArxivMetadata.title, 'Training synthetic parsers with structured preprint records');
+assert.strictEqual(trailingYearArxivMetadata.venue, 'arXiv');
+assert.strictEqual(trailingYearArxivMetadata.date, '2026');
+
 const trailingYearJournalMetadata = extractReferenceMetadata('[18] Avery Fixture, Blair Sample, and Casey Harness. Can synthetic records improve parser tests? Proceedings of the Fixture Intelligence Conference, 33(01):9795–9799, Jul. 2019.');
 assert.strictEqual(trailingYearJournalMetadata.authors, 'Avery Fixture, Blair Sample, and Casey Harness');
 assert.strictEqual(trailingYearJournalMetadata.date, '2019');
@@ -396,6 +475,13 @@ assert.strictEqual(trailingYearJournalMetadata.venue, 'Proceedings of the Fixtur
 assert.strictEqual(trailingYearJournalMetadata.volume, '33');
 assert.strictEqual(trailingYearJournalMetadata.issue, '01');
 assert.strictEqual(trailingYearJournalMetadata.pages, '9795–9799');
+
+const trailingYearJournalWithoutIssueMetadata = extractReferenceMetadata('Avery Fixture, Blair Sample, and Casey Harness. Aligning synthetic records with parser attention. Advances in Fixture Processing Systems, 37:1890–1918, 2024.');
+assert.strictEqual(trailingYearJournalWithoutIssueMetadata.title, 'Aligning synthetic records with parser attention');
+assert.strictEqual(trailingYearJournalWithoutIssueMetadata.venue, 'Advances in Fixture Processing Systems');
+assert.strictEqual(trailingYearJournalWithoutIssueMetadata.volume, '37');
+assert.strictEqual(trailingYearJournalWithoutIssueMetadata.issue, '');
+assert.strictEqual(trailingYearJournalWithoutIssueMetadata.pages, '1890–1918');
 
 const trailingYearEmbeddedQuoteMetadata = extractReferenceMetadata('[21] Avery Fixture, Blair Sample, and Casey Harness. "parser, can I test you?": Student perceptions of synthetic citation tools. In Proceedings of the Annual Fixture Interaction Conference, pages 305–313, Sampleton, TS, USA, 2021. Association for Fixture Machinery.');
 assert.strictEqual(trailingYearEmbeddedQuoteMetadata.title, '"parser, can I test you?": Student perceptions of synthetic citation tools');

@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.9';
+const ENGINE_VERSION = 'citecheck-v3.10';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -20,7 +20,7 @@ const ARXIV_TIMEOUT_MS = Number(process.env.ARXIV_TIMEOUT_MS || 10000);
 const ARXIV_CACHE_TTL_MS = Number(process.env.ARXIV_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const ARXIV_CACHE_MAX_ENTRIES = Number(process.env.ARXIV_CACHE_MAX_ENTRIES || 500);
 const REFERENCE_HEADING_RE = /^(?:(?:acknowledgments?|acknowledgements?)\s+)?(?:references|bibliography)$/i;
-const SECTION_STOP_RE = /^(?:abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b/i;
+const SECTION_STOP_RE = /^(?:(?:[A-Z]|\d+(?:\.\d+)*)\s+)?(?:abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b/i;
 let nextCrossrefRequestAt = 0;
 let nextArxivRequestAt = 0;
 let arxivRequestQueue = Promise.resolve();
@@ -53,27 +53,28 @@ function cleanExtractedText(text) {
   return text
     .replace(/\r/g, '')
     .replace(/([a-zA-Z])\n(?=[a-zA-Z])/g, '$1 ')
-    .replace(/\n{2,}/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]+/g, ' ')
     .trim();
 }
 
 function repairDoiWrapping(text) {
   return text
-    .replace(/(\b(?:doi:\s*|https?:\/\/doi\.org\/)?10\.)\s+(?=\d{4,9}\/)/gi, '$1')
-    .replace(/(\b10\.\d{4,9}\/)[\s]+(?=[-._;()/:A-Z0-9])/gi, '$1')
-    .replace(/(\b10\.\d{4,9}\/[-._;()/:A-Z0-9]*[-._;()/:])\s+(?=[-._;()/:A-Z0-9])/gi, '$1');
+    .replace(/(https?:\/\/doi\.org\/)(?:[ \t]+|[ \t]*\n[ \t]*)(?=10\.)/gi, '$1')
+    .replace(/(\b(?:doi:\s*|https?:\/\/doi\.org\/)?10\.)(?:[ \t]+|[ \t]*\n[ \t]*)(?=\d{4,9}\/)/gi, '$1')
+    .replace(/(\b10\.\d{4,9}\/)(?:[ \t]+|[ \t]*\n[ \t]*)(?!(?:URL\b|https?:\/\/|doi\b))(?=[-._;()/:A-Z0-9])/gi, '$1')
+    .replace(/(\b10\.\d{4,9}\/[-._;()/:A-Z0-9]*[-._;()/:])(?:[ \t]+|[ \t]*\n[ \t]*)(?!(?:URL\b|https?:\/\/|doi\b))(?=[-._;()/:A-Z0-9])/gi, '$1');
 }
 
 function stripPageHeaders(text) {
-  const lines = text.split(/\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = text.split(/\n/).map((line) => line.trim());
   const referenceHeadingIndex = lines.findIndex((line) => REFERENCE_HEADING_RE.test(line));
 
   if (referenceHeadingIndex < 0) {
-    return lines.join('\n');
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  return lines.slice(referenceHeadingIndex + 1).join('\n');
+  return lines.slice(referenceHeadingIndex + 1).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function reorderTextForColumns(text) {
@@ -387,7 +388,7 @@ function cleanReferenceForMetadata(reference) {
     .trim();
 }
 
-function findNonInitialSentenceBoundary(text, allowQuestionMark = false) {
+function findNonInitialSentenceBoundary(text, allowQuestionMark = false, allowTerminalEtAl = false) {
   const punctuation = allowQuestionMark ? /[.?]/g : /\./g;
   for (const match of text.matchAll(punctuation)) {
     const index = match.index;
@@ -396,7 +397,8 @@ function findNonInitialSentenceBoundary(text, allowQuestionMark = false) {
     if (match[0] === '?' && !/^(?:In\s+|Proceedings\b|[A-Z][^.!?]+,\s*\d+[A-Za-z]?\s*\()/i.test(after.trimStart())) continue;
     if (match[0] === '.' && /(?:^|[\s(,])[A-Z]$/.test(text.slice(0, index))) continue;
     if (match[0] === '.' && /(?:[A-Z]\.){2,}[A-Z]$/.test(text.slice(0, index))) continue;
-    if (match[0] === '.' && /\b(?:vs|etc|al)$/i.test(text.slice(0, index))) continue;
+    if (match[0] === '.' && /\b(?:vs|etc)$/i.test(text.slice(0, index))) continue;
+    if (match[0] === '.' && /\bal$/i.test(text.slice(0, index)) && !allowTerminalEtAl) continue;
     return { index, punctuation: match[0], end: index + 1 + after.match(/^\s+/)[0].length };
   }
   return null;
@@ -471,10 +473,13 @@ function parseApaLikeReference(reference) {
 function parseTrailingYearReference(reference) {
   if (findQuotedTitle(reference)) return null;
   const cleaned = cleanReferenceForMetadata(reference);
-  const authorBoundary = findNonInitialSentenceBoundary(cleaned);
+  const authorBoundary = findNonInitialSentenceBoundary(cleaned, false, true);
   if (!authorBoundary) return null;
 
-  const authors = cleaned.slice(0, authorBoundary.index).trim();
+  const authorText = cleaned.slice(0, authorBoundary.index);
+  const authors = cleaned
+    .slice(0, /\bet\s+al$/i.test(authorText) ? authorBoundary.index + 1 : authorBoundary.index)
+    .trim();
   const remainder = cleaned.slice(authorBoundary.end).trim();
   if (!authors || !remainder || /^(?:19|20)\d{2}\b/.test(remainder)) return null;
 
@@ -487,21 +492,33 @@ function parseTrailingYearReference(reference) {
   if (!title || !publication || !yearMatches.length) return null;
 
   const date = yearMatches[yearMatches.length - 1][0];
-  const pageMatch = publication.match(/\bpages?\s+([A-Za-z]?\d+\s*[–—-]\s*[A-Za-z]?\d+|\d+)/i);
+  const pageMatch = publication.match(/\b(?:pp?\.?|pages?)\s+([A-Za-z]?\d+\s*[–—-]\s*[A-Za-z]?\d+|\d+)/i);
   let venue = '';
   let volume = '';
   let issue = '';
   let pages = pageMatch ? pageMatch[1].replace(/\s*([–—-])\s*/g, '$1').trim() : '';
 
   const journalMatch = publication.match(/^(.+?),\s*(\d+[A-Za-z]?)\s*\(([^)]+)\)(?:\s*:\s*([^,.;]+))?/);
+  const journalWithoutIssueMatch = publication.match(/^(.+?),\s*(\d+[A-Za-z]?)\s*:\s*([^,.;]+)/);
   if (journalMatch) {
     venue = journalMatch[1].trim();
     volume = journalMatch[2].trim();
     issue = journalMatch[3].trim();
     if (!pages && journalMatch[4]) pages = journalMatch[4].replace(/\s*([–—-])\s*/g, '$1').trim();
-  } else if (/^(?:In\s+)?(?:Proceedings\b|\d{4}\s+IEEE\b)/i.test(publication)) {
+  } else if (journalWithoutIssueMatch) {
+    venue = journalWithoutIssueMatch[1].trim();
+    volume = journalWithoutIssueMatch[2].trim();
+    pages = journalWithoutIssueMatch[3].replace(/\s*([–—-])\s*/g, '$1').trim();
+  } else if (/^arXiv\s+preprint\b/i.test(publication)) {
+    venue = 'arXiv';
+  } else if (
+    /^(?:In\s+)?(?:Proceedings\b|\d{4}\s+IEEE\b)/i.test(publication)
+    || /^In\s+.+\b(?:conference|symposium|workshop|congress)\b/i.test(publication)
+    || /^In\s+.+\((?:eds?|editors?)\.?\),/i.test(publication)
+  ) {
     let conference = publication.replace(/^In\s+/i, '');
-    const pageIndex = conference.search(/,\s*pages?\s+/i);
+    conference = conference.replace(/^.+?\((?:eds?|editors?)\.?\),\s*/i, '');
+    const pageIndex = conference.search(/,\s*(?:pp?\.?|pages?)\s+/i);
     if (pageIndex >= 0) conference = conference.slice(0, pageIndex);
     else conference = conference.replace(/,\s*[A-Z][^,]+,\s*[A-Z]{2},\s*USA,.*$/i, '');
     venue = conference.replace(/[,.;\s]+$/g, '').trim();

@@ -12,12 +12,13 @@ BRACKET_REFERENCE_START_RE = re.compile(r"^\[(\d{1,3})\]\s+")
 NUMERIC_REFERENCE_START_RE = re.compile(r"^([1-9]\d{0,2})[.)]\s+")
 REFERENCE_START_RE = re.compile(r"^(?:\[(\d{1,3})\]|([1-9]\d{0,2})[.)])\s+")
 SECTION_STOP_RE = re.compile(
-    r"^(abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b",
+    r"^(?:(?:[A-Z]|\d+(?:\.\d+)*)\s+)?"
+    r"(abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b",
     re.I,
 )
 SECTION_BOUNDARY_MARKER = "\x00CITECHECK_SECTION_BOUNDARY\x00"
 INLINE_REFERENCE_START_RE = re.compile(r"(?<!\S)(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])(?=\s+[\w\"'“])")
-YEAR_RE = re.compile(r"\((?:19|20)\d{2}(?:[,;)])")
+YEAR_RE = re.compile(r"\b(?:19|20)\d{2}[a-z]?\b", re.I)
 AUTHOR_DATE_START_RE = re.compile(
     r"^.{2,320}?\((?:19|20)\d{2}(?:[a-z]|,\s*[^)]*)?\)\.\s+",
     re.I,
@@ -58,10 +59,21 @@ def repair_line_wrapping(text):
 
     # PDF line extraction can insert whitespace at any visual line break. Repair
     # unambiguous DOI boundaries before applying the more general suffix repair.
+    text = re.sub(r"(https?://doi\.org/)\s+(?=10\.)", r"\1", text, flags=re.I)
     text = re.sub(r"(\b(?:doi:\s*|https?://doi\.org/)?10\.)\s+(?=\d{4,9}/)", r"\1", text, flags=re.I)
     text = re.sub(r"(\b10\.\d{4,9}/)\s+(?=[-._;()/:A-Z0-9])", r"\1", text, flags=re.I)
-    text = re.sub(r"(doi:\s*10\.\d{4,9}/\S+)\s+([A-Za-z0-9])", r"\1\2", text, flags=re.I)
-    text = re.sub(r"(10\.\d{4,9}/\S*[-./])\s+([A-Za-z0-9])", r"\1\2", text, flags=re.I)
+    text = re.sub(
+        r"(doi:\s*10\.\d{4,9}/\S+)\s+(?!(?:URL\b|https?://|doi\b))([A-Za-z0-9])",
+        r"\1\2",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(
+        r"(10\.\d{4,9}/\S*[-./])\s+(?!(?:URL\b|https?://|doi\b))([A-Za-z0-9])",
+        r"\1\2",
+        text,
+        flags=re.I,
+    )
 
     def repair_hyphen(match):
         left, right = match.group(1), match.group(2)
@@ -218,7 +230,42 @@ def ordered_lines(page):
     return lines
 
 
+def merge_same_baseline_fragments(lines, page_width):
+    if not lines:
+        return []
+
+    baseline_tolerance = 1.5
+    maximum_fragment_gap = page_width * 0.03
+    baseline_groups = []
+    for line in sorted(lines, key=lambda item: (item[1], item[0])):
+        if baseline_groups and abs(line[1] - baseline_groups[-1][0][1]) <= baseline_tolerance:
+            baseline_groups[-1].append(line)
+        else:
+            baseline_groups.append([line])
+
+    merged = []
+    for baseline_group in baseline_groups:
+        current = None
+        for line in sorted(baseline_group, key=lambda item: item[0]):
+            if current is not None and line[0] - current[2] <= maximum_fragment_gap:
+                current = (
+                    min(current[0], line[0]),
+                    min(current[1], line[1]),
+                    max(current[2], line[2]),
+                    max(current[3], line[3]),
+                    normalize_text(f"{current[4]} {line[4]}"),
+                )
+            else:
+                if current is not None:
+                    merged.append(current)
+                current = line
+        if current is not None:
+            merged.append(current)
+    return merged
+
+
 def lines_by_column(lines, page_width):
+    lines = merge_same_baseline_fragments(lines, page_width)
     midpoint = page_width / 2
     left = [line for line in lines if line[0] < midpoint]
     right = [line for line in lines if line[0] >= midpoint]
@@ -384,6 +431,29 @@ def split_unnumbered_column(column):
     return groups
 
 
+def looks_like_unnumbered_reference(text):
+    normalized = repair_line_wrapping(text)
+    if len(normalized.split()) < 5 or not YEAR_RE.search(normalized):
+        return False
+
+    before_year = normalized[:YEAR_RE.search(normalized).start()]
+    has_authored_sentence = bool(re.search(r"[A-Za-z][.!?]\s+[A-Z]", before_year))
+    has_publication_signal = bool(re.search(
+        r"\b(?:doi|arxiv|isbn|journal|proceedings?|conference|transactions?|press|springer|"
+        r"volume|vol\.?|pp?\.?|pages?|publisher)\b|https?://|\d+\s*\([^)]*\)\s*:\s*\d+",
+        normalized,
+        re.I,
+    ))
+    return has_authored_sentence or has_publication_signal
+
+
+def looks_like_reference_collection(reference_groups):
+    if len(reference_groups) < 3:
+        return False
+    viable_count = sum(looks_like_unnumbered_reference(group) for group in reference_groups)
+    return viable_count / len(reference_groups) >= 0.6
+
+
 def build_unnumbered_reference_groups(doc):
     heading_page_index, heading_line = find_reference_heading(doc)
     if heading_page_index is None:
@@ -420,7 +490,7 @@ def build_unnumbered_reference_groups(doc):
 
             page_groups = split_unnumbered_column(column)
             for group in page_groups:
-                if reference_groups and not AUTHOR_DATE_START_RE.match(group):
+                if reference_groups and not looks_like_unnumbered_reference(group):
                     reference_groups[-1] = repair_line_wrapping(f"{reference_groups[-1]} {group}")
                 else:
                     reference_groups.append(group)
@@ -430,7 +500,7 @@ def build_unnumbered_reference_groups(doc):
 
     return [
         group for group in reference_groups
-        if YEAR_RE.search(group) and len(group.split()) >= 5
+        if looks_like_unnumbered_reference(group)
     ]
 
 
@@ -498,10 +568,13 @@ def extract_document_text(pdf_path):
     unnumbered_references = False
     document_references = build_reference_groups(all_blocks)
     if len(document_references) < 3:
-        document_references = build_reference_groups(all_blocks, heading_seen=True)
-    if len(document_references) < 3:
         document_references = build_unnumbered_reference_groups(doc)
         unnumbered_references = True
+    if len(document_references) < 3 and find_reference_heading(doc)[0] is None:
+        headerless_references = build_reference_groups(all_blocks, heading_seen=True)
+        if looks_like_reference_collection(headerless_references):
+            document_references = headerless_references
+            unnumbered_references = False
 
     if document_references:
         groups = document_references if unnumbered_references else sort_reference_groups(document_references)

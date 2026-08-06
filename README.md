@@ -35,6 +35,18 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.10 2026-08-05
+- extract unnumbered hanging-indent references with trailing publication years
+- keep same-line PDF fragments together and reject numbered appendix lists as headerless bibliographies
+- preserve blank-line boundaries between unnumbered references through the Node text-cleanup pipeline
+- prevent DOI wrapping repair from consuming the boundary before the following citation
+- keep duplicate `doi:` and `URL https://doi.org/` forms separate while repairing wrapped DOI text
+- extract ordinal conference venues and abbreviated `pp.` page ranges from trailing-year citations
+- recognize terminal `et al.` author lists and extract titles and venues from trailing-year arXiv preprints
+- remove editor preambles when extracting venues from edited proceedings citations
+- parse trailing-year journal records written as `venue, volume:pages` without an issue number
+- cover complete PDF extraction and JavaScript reference splitting with an end-to-end regression
+
 ## 3.9 2026-08-02
 - distinguish a real author-date bibliography heading from an earlier table-of-contents entry
 - group flush-left bibliography continuations using adaptive vertical spacing and stop at the following section
