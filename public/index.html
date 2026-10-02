@@ -99,6 +99,25 @@
         return `<a href="${escapeHtml(doiUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doiText)}</a>`;
       }
 
+      function renderCitationText(reference) {
+        const text = String(reference || '');
+        const doiPattern = /10\.\d{4,9}\/[\-._;()/:A-Z0-9]+/gi;
+        let html = '';
+        let cursor = 0;
+
+        for (const match of text.matchAll(doiPattern)) {
+          const matchedText = match[0];
+          const doiText = matchedText.replace(/[.,;:]+$/g, '');
+          const trailingText = matchedText.slice(doiText.length);
+          html += escapeHtml(text.slice(cursor, match.index));
+          html += `<a href="${escapeHtml(`https://doi.org/${doiText}`)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doiText)}</a>`;
+          html += escapeHtml(trailingText);
+          cursor = match.index + matchedText.length;
+        }
+
+        return html + escapeHtml(text.slice(cursor));
+      }
+
       function metadataValue(metadata, key) {
         return metadata && metadata[key] ? metadata[key] : 'Not found';
       }
@@ -297,7 +316,7 @@
             ${data.references.map((ref, index) => `
               <div id="reference-${index + 1}" class="card reference-card">
                 <h3>${index + 1}</h3>
-                <div class="citation-text">${escapeHtml(ref.reference)}</div>
+                <div class="citation-text">${renderCitationText(ref.reference)}</div>
                 <p><strong>Type:</strong> ${escapeHtml(ref.type)}
                    &nbsp;&nbsp;&nbsp;&nbsp;<strong>Metadata source:</strong> ${escapeHtml(ref.source === 'arxiv' ? 'arXiv' : ref.source === 'crossref' ? 'Crossref' : 'Not found')}
                    &nbsp;&nbsp;&nbsp;&nbsp;<strong>DOI:</strong> ${renderDoi(ref.doi)}</p>

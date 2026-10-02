@@ -35,6 +35,9 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.11 2026-10-02
+- link DOI identifiers embedded in extracted citation text to their `doi.org` targets
+
 ## 3.10 2026-08-05
 - extract unnumbered hanging-indent references with trailing publication years
 - keep same-line PDF fragments together and reject numbered appendix lists as headerless bibliographies

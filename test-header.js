@@ -1,4 +1,5 @@
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const {
@@ -27,6 +28,26 @@ const {
   fetchArxivEntriesByIds,
   repairDoiWrapping
 } = require('./server');
+
+const clientHtml = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+assert.ok(clientHtml.includes('${renderCitationText(ref.reference)}'));
+const renderCitationTextSource = clientHtml.slice(
+  clientHtml.indexOf('function renderCitationText(reference)'),
+  clientHtml.indexOf('function metadataValue(metadata, key)')
+);
+const renderCitationText = new Function('escapeHtml', `${renderCitationTextSource}; return renderCitationText;`)(
+  (value) => String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]))
+);
+const linkedCitation = renderCitationText('Fixture <record>. doi: 10.1000/example.2026.7.');
+assert.ok(linkedCitation.includes('Fixture &lt;record&gt;. doi:'));
+assert.ok(linkedCitation.includes('href="https://doi.org/10.1000/example.2026.7"'));
+assert.ok(linkedCitation.includes('>10.1000/example.2026.7</a>.'));
 
 const sample = `
 A Very Long Paper Title
