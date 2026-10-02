@@ -28,6 +28,12 @@
       .drop-zone-title { display: block; font-size: 1.1rem; font-weight: bold; }
       .drop-zone-hint { display: block; margin-top: 0.35rem; color: #555; }
       .selected-file { min-height: 1.5rem; margin: 0.5rem 0 0; font-size: 0.95rem; }
+      .bibtex-dialog { width: min(48rem, calc(100vw - 3rem)); border: 1px solid #aaa; border-radius: 8px; padding: 1rem; }
+      .bibtex-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+      .bibtex-dialog h2 { margin-top: 0; }
+      .bibtex-text { box-sizing: border-box; width: 100%; min-height: 18rem; padding: 0.75rem; font-family: monospace; font-size: 0.95rem; resize: vertical; }
+      .bibtex-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem; }
+      .bibtex-copy-status { min-height: 1.5rem; }
       .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
       button { padding: 0.6rem 1rem; cursor: pointer; }
       pre { white-space: pre-wrap; background: #f7f7f7; padding: 1rem; border-radius: 6px; }
@@ -59,6 +65,15 @@
     </form>
     <div id="debug-output" class="card" style="display:none;"></div>
     <div id="result"></div>
+    <dialog id="bibtex-dialog" class="bibtex-dialog" aria-labelledby="bibtex-dialog-title">
+      <h2 id="bibtex-dialog-title">BibTeX for found reference</h2>
+      <textarea id="bibtex-text" class="bibtex-text" readonly spellcheck="false" aria-label="BibTeX code"></textarea>
+      <div class="bibtex-actions">
+        <button id="bibtex-copy" type="button">Copy BibTeX</button>
+        <button id="bibtex-close" type="button">Close</button>
+        <span id="bibtex-copy-status" class="bibtex-copy-status" role="status" aria-live="polite"></span>
+      </div>
+    </dialog>
 
     <script>
       const form = document.getElementById('upload-form');
@@ -69,6 +84,12 @@
       const pdfInput = document.getElementById('pdf-input');
       const dropZone = document.getElementById('drop-zone');
       const selectedFile = document.getElementById('selected-file');
+      const bibtexDialog = document.getElementById('bibtex-dialog');
+      const bibtexText = document.getElementById('bibtex-text');
+      const bibtexCopy = document.getElementById('bibtex-copy');
+      const bibtexClose = document.getElementById('bibtex-close');
+      const bibtexCopyStatus = document.getElementById('bibtex-copy-status');
+      let currentReferences = [];
 
       function escapeHtml(value) {
         return String(value || '').replace(/[&<>"']/g, (char) => ({
@@ -97,6 +118,12 @@
         const doiText = String(doi).replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '');
         const doiUrl = `https://doi.org/${doiText}`;
         return `<a href="${escapeHtml(doiUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doiText)}</a>`;
+      }
+
+      function renderBibtexLink(reference, index) {
+        const confidence = String(reference && reference.confidence || '').toLowerCase();
+        if (!reference || !reference.bibtex || !['high', 'medium'].includes(confidence)) return '';
+        return `&nbsp;&nbsp;&nbsp;&nbsp;<a href="#" class="bibtex-link" data-reference-index="${index}">BibTeX</a>`;
       }
 
       function renderCitationText(reference) {
@@ -290,6 +317,7 @@
             body: formData
           });
           const data = await readAnalyzeResponse(response, renderProgress);
+          currentReferences = Array.isArray(data.references) ? data.references : [];
 
           if (showDebugDetails && data.debugOutput) {
             debugOutput.innerHTML = `<pre>${escapeHtml(data.debugOutput)}</pre>`;
@@ -319,7 +347,7 @@
                 <div class="citation-text">${renderCitationText(ref.reference)}</div>
                 <p><strong>Type:</strong> ${escapeHtml(ref.type)}
                    &nbsp;&nbsp;&nbsp;&nbsp;<strong>Metadata source:</strong> ${escapeHtml(ref.source === 'arxiv' ? 'arXiv' : ref.source === 'crossref' ? 'Crossref' : 'Not found')}
-                   &nbsp;&nbsp;&nbsp;&nbsp;<strong>DOI:</strong> ${renderDoi(ref.doi)}</p>
+                   &nbsp;&nbsp;&nbsp;&nbsp;<strong>DOI:</strong> ${renderDoi(ref.doi)}${renderBibtexLink(ref, index)}</p>
                 ${renderMetadataComparison(ref.metadata)}
                 <p class="confidence-${escapeHtml(ref.confidence)}"><strong>Confidence:</strong> ${escapeHtml(ref.confidence.toUpperCase())}</p>
                 <p><strong>Summary:</strong> ${escapeHtml(ref.summary)}</p>
@@ -329,6 +357,7 @@
             `).join('')}
           `;
         } catch (err) {
+          currentReferences = [];
           result.innerHTML = `<p style="color:red">${err.message}</p>`;
         }
       }
@@ -358,6 +387,37 @@
         dropZone.classList.remove('is-dragging');
         const file = event.dataTransfer.files && event.dataTransfer.files[0];
         analyzeSelectedPdf(file);
+      });
+
+      result.addEventListener('click', (event) => {
+        const link = event.target.closest('.bibtex-link');
+        if (!link) return;
+        event.preventDefault();
+        const reference = currentReferences[Number(link.dataset.referenceIndex)];
+        if (!reference || !reference.bibtex) return;
+        bibtexText.value = reference.bibtex;
+        bibtexCopyStatus.textContent = '';
+        if (typeof bibtexDialog.showModal === 'function') bibtexDialog.showModal();
+        else bibtexDialog.setAttribute('open', '');
+        bibtexText.focus();
+        bibtexText.select();
+      });
+
+      bibtexCopy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(bibtexText.value);
+          bibtexCopyStatus.textContent = 'Copied.';
+        } catch (error) {
+          bibtexText.focus();
+          bibtexText.select();
+          const copied = document.execCommand && document.execCommand('copy');
+          bibtexCopyStatus.textContent = copied ? 'Copied.' : 'Select the text and copy it manually.';
+        }
+      });
+
+      bibtexClose.addEventListener('click', () => {
+        if (typeof bibtexDialog.close === 'function') bibtexDialog.close();
+        else bibtexDialog.removeAttribute('open');
       });
     </script>
   </body>

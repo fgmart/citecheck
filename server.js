@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.14';
+const ENGINE_VERSION = 'citecheck-v4.0';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -782,6 +782,93 @@ function candidateMetadata(candidate = {}) {
   };
 }
 
+function escapeBibtexValue(value) {
+  const replacements = {
+    '\\': '\\textbackslash{}',
+    '{': '\\{',
+    '}': '\\}',
+    '%': '\\%',
+    '$': '\\$',
+    '#': '\\#',
+    '&': '\\&',
+    '_': '\\_',
+    '~': '\\textasciitilde{}',
+    '^': '\\textasciicircum{}'
+  };
+  return normalizeText(String(value || '')).replace(/[\\{}%$#&_~^]/g, (character) => replacements[character]);
+}
+
+function bibtexEntryType(candidate = {}) {
+  if (candidate.source === 'arxiv') return 'misc';
+  const crossrefTypes = {
+    'journal-article': 'article',
+    'proceedings-article': 'inproceedings',
+    'book-chapter': 'incollection',
+    'book-section': 'incollection',
+    book: 'book',
+    monograph: 'book',
+    report: 'techreport',
+    dissertation: 'phdthesis',
+    'posted-content': 'misc',
+    dataset: 'misc'
+  };
+  if (crossrefTypes[candidate.referenceType]) return crossrefTypes[candidate.referenceType];
+  if (/\b(?:proceedings|conference|symposium|workshop)\b/i.test(candidate.containerTitle || '')) return 'inproceedings';
+  return candidate.containerTitle ? 'article' : 'misc';
+}
+
+function bibtexAuthorList(candidate = {}) {
+  if (candidate.bibtexAuthors) return candidate.bibtexAuthors;
+  return normalizeText(candidate.authors || '')
+    .replace(/\s*,\s*(?=[^,]+(?:,|$))/g, ' and ')
+    .replace(/\s+and\s+/gi, ' and ');
+}
+
+function bibtexCitationKey(candidate = {}) {
+  const authors = bibtexAuthorList(candidate);
+  const firstAuthor = authors.split(/\s+and\s+/i)[0] || '';
+  const familyName = (firstAuthor.includes(',') ? firstAuthor.split(',')[0] : firstAuthor.split(/\s+/).pop()) || 'Reference';
+  const titleWord = normalizeText(candidate.title || '')
+    .split(/\s+/)
+    .find((word) => !/^(?:a|an|the|of|for|in|on|and|with|to)$/i.test(word)) || 'Work';
+  const clean = (value) => String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]/g, '');
+  return `${clean(familyName) || 'Reference'}${clean(candidate.year) || ''}${clean(titleWord) || 'Work'}`;
+}
+
+function generateBibtex(candidate = {}) {
+  if (!candidate.title && !candidate.authors && !candidate.doi && !candidate.arxivId) return null;
+
+  const entryType = bibtexEntryType(candidate);
+  const fields = [];
+  const addField = (name, value) => {
+    if (value !== undefined && value !== null && String(value).trim()) {
+      fields.push(`  ${name} = {${escapeBibtexValue(value)}}`);
+    }
+  };
+
+  addField('author', bibtexAuthorList(candidate));
+  addField('title', candidate.title);
+  if (entryType === 'article') addField('journal', candidate.containerTitle);
+  else if (entryType === 'inproceedings' || entryType === 'incollection') addField('booktitle', candidate.containerTitle);
+  addField('year', candidate.year);
+  addField('volume', candidate.volume);
+  addField('number', candidate.issue);
+  addField('pages', String(candidate.pages || '').replace(/\s*(?:[–—]|-{1,2})\s*/g, '--'));
+  addField('publisher', candidate.publisher);
+  addField('doi', candidate.doi);
+  if (!candidate.doi) addField('url', candidate.url);
+  if (candidate.source === 'arxiv') {
+    addField('eprint', `${candidate.arxivId || ''}${candidate.arxivVersion || ''}`);
+    addField('archivePrefix', 'arXiv');
+    addField('primaryClass', candidate.primaryCategory);
+  }
+
+  return `@${entryType}{${bibtexCitationKey(candidate)},\n${fields.join(',\n')}\n}`;
+}
+
 function tokenize(text) {
   return normalizeText(text)
     .toLowerCase()
@@ -906,9 +993,12 @@ function formatCrossrefAuthor(author = {}) {
 }
 
 function normalizeCrossrefWork(work = {}) {
-  const authors = Array.isArray(work.author)
-    ? work.author.map(formatCrossrefAuthor).filter(Boolean).join(', ')
-    : '';
+  const crossrefAuthors = Array.isArray(work.author) ? work.author : [];
+  const authors = crossrefAuthors.map(formatCrossrefAuthor).filter(Boolean).join(', ');
+  const bibtexAuthors = crossrefAuthors
+    .map((author) => author.name || [author.family, author.given].filter(Boolean).join(', '))
+    .filter(Boolean)
+    .join(' and ');
   const title = Array.isArray(work.title) ? work.title[0] : work.title || '';
   const subtitle = Array.isArray(work.subtitle) ? work.subtitle[0] : work.subtitle || '';
   const fullTitle = title && subtitle && !title.toLowerCase().includes(subtitle.toLowerCase())
@@ -920,6 +1010,7 @@ function normalizeCrossrefWork(work = {}) {
     doi: normalizeDoi(work.DOI || work.doi || ''),
     title: fullTitle,
     authors,
+    bibtexAuthors,
     containerTitle: Array.isArray(work['container-title']) ? work['container-title'][0] : work['container-title'] || '',
     year: getCrossrefYear(work),
     volume: work.volume || '',
@@ -927,6 +1018,7 @@ function normalizeCrossrefWork(work = {}) {
     pages: work.page || '',
     publisher: work.publisher || '',
     url: work.URL || '',
+    referenceType: work.type || '',
     crossrefScore: typeof work.score === 'number' ? work.score : null
   };
 }
@@ -955,10 +1047,10 @@ function normalizeArxivEntry(entry = {}) {
   const identifier = parseArxivEntryId(entry.id);
   if (!identifier.baseId) return null;
 
-  const authors = asArray(entry.author)
+  const arxivAuthors = asArray(entry.author)
     .map((author) => xmlText(author && author.name))
-    .filter(Boolean)
-    .join(', ');
+    .filter(Boolean);
+  const authors = arxivAuthors.join(', ');
   const categories = asArray(entry.category)
     .map((category) => category && category['@_term'])
     .filter(Boolean);
@@ -975,6 +1067,7 @@ function normalizeArxivEntry(entry = {}) {
     doi: normalizeDoi(`10.48550/arXiv.${identifier.baseId}`),
     title: xmlText(entry.title),
     authors,
+    bibtexAuthors: arxivAuthors.join(' and '),
     containerTitle: 'arXiv',
     year: /^\d{4}/.test(published) ? Number(published.slice(0, 4)) : null,
     volume: '',
@@ -1271,6 +1364,7 @@ async function analyzeReference(reference, options = {}) {
   let doiFound = null;
   let matchedMetadata = candidateMetadata();
   let matchedSource = null;
+  let matchedCandidate = null;
 
   if (arxivIdentifier) {
     try {
@@ -1293,6 +1387,7 @@ async function analyzeReference(reference, options = {}) {
         recommendations = ['Check the arXiv identifier and confirm that the cited preprint is publicly available.'];
       } else {
         const match = scoreCandidateMatch(reference, candidate);
+        matchedCandidate = candidate;
         confidence = match.confidence;
         const versionMismatched = Boolean(arxivIdentifier.version && candidate.arxivVersion !== arxivIdentifier.version);
         if (versionMismatched && confidence === 'high') confidence = 'medium';
@@ -1329,6 +1424,7 @@ async function analyzeReference(reference, options = {}) {
       const lookup = options.fetchCrossrefWorkByDoi || fetchCrossrefWorkByDoi;
       const candidate = await lookup(doi);
       const match = scoreCandidateMatch(reference, candidate);
+      matchedCandidate = candidate;
       confidence = match.confidence;
       doiFound = candidate.doi || doi;
       matchedMetadata = candidateMetadata(candidate);
@@ -1367,6 +1463,7 @@ async function analyzeReference(reference, options = {}) {
           const arxivRanked = rankCandidates(reference, await arxivSearch(reference));
           const bestArxiv = arxivRanked[0];
           if (bestArxiv && bestArxiv.match.confidence !== 'low') {
+            matchedCandidate = bestArxiv;
             confidence = bestArxiv.match.confidence === 'high' ? 'medium' : bestArxiv.match.confidence;
             doiFound = bestArxiv.doi;
             matchedMetadata = candidateMetadata(bestArxiv);
@@ -1392,6 +1489,7 @@ async function analyzeReference(reference, options = {}) {
       }
 
       if (best && !usedArxivFallback) {
+        matchedCandidate = best;
         confidence = best.match.confidence;
         if (confidence === 'high') confidence = 'medium';
         doiFound = best.doi;
@@ -1445,6 +1543,9 @@ async function analyzeReference(reference, options = {}) {
       extracted: extractedMetadata,
       matched: matchedMetadata
     },
+    bibtex: matchedCandidate && (confidence === 'high' || confidence === 'medium')
+      ? generateBibtex(matchedCandidate)
+      : null,
     summary,
     recommendations,
     evidence,
@@ -1716,6 +1817,7 @@ module.exports = {
   extractYear,
   extractDoi,
   extractArxivIdentifier,
+  generateBibtex,
   shouldSearchArxiv,
   fetchWithTimeout,
   isRetriableArxivStatus,

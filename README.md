@@ -35,6 +35,11 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 4.0 2026-10-02
+- provide copyable BibTeX for high- and medium-confidence found references from an inline result link
+- omit redundant BibTeX URLs when a DOI is available
+- thanks, A.B.!
+
 ## 3.14 2026-10-02
 - stop numbered bibliographies when a lettered appendix begins lower on the final reference page
 

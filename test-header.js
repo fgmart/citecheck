@@ -21,6 +21,7 @@ const {
   extractReferenceMetadata,
   extractDoi,
   extractArxivIdentifier,
+  generateBibtex,
   shouldSearchArxiv,
   fetchWithTimeout,
   isRetriableArxivStatus,
@@ -31,6 +32,18 @@ const {
 
 const clientHtml = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
 assert.ok(clientHtml.includes('${renderCitationText(ref.reference)}'));
+assert.ok(clientHtml.includes('${renderBibtexLink(ref, index)}'));
+assert.ok(clientHtml.includes('id="bibtex-dialog"'));
+assert.ok(clientHtml.includes('navigator.clipboard.writeText(bibtexText.value)'));
+const renderBibtexLinkSource = clientHtml.slice(
+  clientHtml.indexOf('function renderBibtexLink(reference, index)'),
+  clientHtml.indexOf('function renderCitationText(reference)')
+);
+const renderBibtexLink = new Function(`${renderBibtexLinkSource}; return renderBibtexLink;`)();
+assert.ok(renderBibtexLink({ confidence: 'high', bibtex: '@article{fixture}' }, 4).includes('data-reference-index="4"'));
+assert.ok(renderBibtexLink({ confidence: 'medium', bibtex: '@article{fixture}' }, 2).includes('>BibTeX</a>'));
+assert.strictEqual(renderBibtexLink({ confidence: 'low', bibtex: '@article{fixture}' }, 1), '');
+assert.strictEqual(renderBibtexLink({ confidence: 'high', bibtex: null }, 1), '');
 const renderCitationTextSource = clientHtml.slice(
   clientHtml.indexOf('function renderCitationText(reference)'),
   clientHtml.indexOf('function metadataValue(metadata, key)')
@@ -748,7 +761,41 @@ assert.strictEqual(normalizedWork.year, 2022);
 assert.strictEqual(normalizedWork.volume, '12');
 assert.strictEqual(normalizedWork.issue, '3');
 assert.strictEqual(normalizedWork.pages, '45-67');
+assert.strictEqual(normalizedWork.bibtexAuthors, 'Smith, Jane');
 assert.strictEqual(normalizeDoi('10.1000/ABC.'), '10.1000/abc');
+
+const generatedBibtex = generateBibtex({
+  source: 'crossref',
+  referenceType: 'journal-article',
+  title: 'Reliable Fixtures & Parser Tests',
+  bibtexAuthors: 'Fixture, Avery and Sample, Blair',
+  containerTitle: 'Journal of Synthetic Records',
+  year: 2026,
+  volume: '12',
+  issue: '3',
+  pages: '44-59',
+  doi: '10.1000/fixture_test.2026.12',
+  url: 'https://doi.org/10.1000/fixture_test.2026.12'
+});
+assert.ok(generatedBibtex.startsWith('@article{Fixture2026Reliable,'));
+assert.ok(generatedBibtex.includes('author = {Fixture, Avery and Sample, Blair}'));
+assert.ok(generatedBibtex.includes('title = {Reliable Fixtures \\& Parser Tests}'));
+assert.ok(generatedBibtex.includes('journal = {Journal of Synthetic Records}'));
+assert.ok(generatedBibtex.includes('number = {3}'));
+assert.ok(generatedBibtex.includes('pages = {44--59}'));
+assert.ok(generatedBibtex.includes('doi = {10.1000/fixture\\_test.2026.12}'));
+assert.ok(!generatedBibtex.includes('url = {'));
+
+const generatedBibtexWithoutDoi = generateBibtex({
+  source: 'crossref',
+  referenceType: 'posted-content',
+  title: 'A Stable Synthetic Web Record',
+  bibtexAuthors: 'Fixture, Avery',
+  year: 2026,
+  url: 'https://example.invalid/stable-record'
+});
+assert.ok(!generatedBibtexWithoutDoi.includes('doi = {'));
+assert.ok(generatedBibtexWithoutDoi.includes('url = {https://example.invalid/stable-record}'));
 
 const subtitleAndFullAuthorsWork = normalizeCrossrefWork({
   DOI: '10.1000/full-metadata',
@@ -876,6 +923,7 @@ assert.strictEqual(isViableSearchCandidate({ match: { score: 0.15 } }), true);
   });
   assert.strictEqual(unrelatedCandidateMatch.source, null);
   assert.strictEqual(unrelatedCandidateMatch.doi, null);
+  assert.strictEqual(unrelatedCandidateMatch.bibtex, null);
   assert.strictEqual(unrelatedCandidateMatch.metadata.matched.title, '');
 
   let active = 0;
@@ -925,6 +973,8 @@ assert.strictEqual(isViableSearchCandidate({ match: { score: 0.15 } }), true);
   assert.strictEqual(arxivMatch.doi, '10.48550/arxiv.2601.12345');
   assert.strictEqual(arxivMatch.source, 'arxiv');
   assert.strictEqual(arxivMatch.confidence, 'high');
+  assert.ok(arxivMatch.bibtex.startsWith('@misc{'));
+  assert.ok(arxivMatch.bibtex.includes('archivePrefix = {arXiv}'));
   assert.ok(arxivMatch.summary.includes('resolved'));
   assert.ok(arxivMatch.evidence.some((line) => line.includes('arXiv identifier matched')));
 
@@ -932,12 +982,14 @@ assert.strictEqual(isViableSearchCandidate({ match: { score: 0.15 } }), true);
     arxivCandidates: new Map([['2601.12345v3', syntheticArxivCandidate]])
   });
   assert.strictEqual(versionMismatchMatch.confidence, 'medium');
+  assert.ok(versionMismatchMatch.bibtex);
   assert.ok(versionMismatchMatch.evidence.some((line) => line.includes('version mismatch')));
 
   const missingArxivMatch = await analyzeReference('[4] Jordan Fixture. 2026. Missing Synthetic Preprint. arXiv:2601.99999', {
     arxivCandidates: new Map([['2601.99999', null]])
   });
   assert.strictEqual(missingArxivMatch.confidence, 'low');
+  assert.strictEqual(missingArxivMatch.bibtex, null);
   assert.ok(missingArxivMatch.summary.includes('was not found'));
 
   let arxivFallbackCalls = 0;
@@ -970,6 +1022,7 @@ assert.strictEqual(isViableSearchCandidate({ match: { score: 0.15 } }), true);
   assert.strictEqual(skippedArxivFallbackCalls, 0);
   assert.strictEqual(crossrefPreferredMatch.source, 'crossref');
   assert.strictEqual(crossrefPreferredMatch.confidence, 'medium');
+  assert.ok(crossrefPreferredMatch.bibtex.startsWith('@article{'));
 
   const originalFetch = global.fetch;
   global.fetch = async () => ({
