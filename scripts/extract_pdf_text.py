@@ -1,7 +1,7 @@
 import re
 import statistics
 import sys
-import fitz
+import pymupdf as fitz
 
 
 REFERENCE_HEADING_RE = re.compile(
