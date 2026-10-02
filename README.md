@@ -35,6 +35,9 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.14 2026-10-02
+- stop numbered bibliographies when a lettered appendix begins lower on the final reference page
+
 ## 3.13 2026-10-02
 - stop numbered bibliographies at emphasized, left-aligned lettered appendix headings
 - exclude proceedings running headers and submission footers so appendix text and bracketed in-text citations cannot extend the final reference

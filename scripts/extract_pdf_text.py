@@ -110,12 +110,13 @@ def is_structural_section_heading(page, block):
     if REFERENCE_HEADING_RE.match(text) or is_reference_start(text) or AUTHOR_DATE_START_RE.match(text):
         return False
 
+    is_lettered_heading = bool(LETTERED_SECTION_HEADING_RE.match(text))
     letters = re.sub(r"[^A-Za-z]", "", text)
     if len(letters) < 4:
         return False
     if len(text) > 80 or len(text.split()) > 10:
         return False
-    if y0 > page.rect.height * 0.2:
+    if y0 > page.rect.height * 0.2 and not is_lettered_heading:
         return False
 
     block_center = (x0 + x1) / 2
@@ -124,7 +125,6 @@ def is_structural_section_heading(page, block):
         abs(block_center - page_center) <= page.rect.width * 0.12
         and (x1 - x0) <= page.rect.width * 0.5
     )
-    is_lettered_heading = bool(LETTERED_SECTION_HEADING_RE.match(text))
     if not is_centered and not is_lettered_heading:
         return False
 
