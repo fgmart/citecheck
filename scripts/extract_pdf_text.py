@@ -63,12 +63,6 @@ def repair_line_wrapping(text):
     text = re.sub(r"(\b(?:doi:\s*|https?://doi\.org/)?10\.)\s+(?=\d{4,9}/)", r"\1", text, flags=re.I)
     text = re.sub(r"(\b10\.\d{4,9}/)\s+(?=[-._;()/:A-Z0-9])", r"\1", text, flags=re.I)
     text = re.sub(
-        r"(doi:\s*10\.\d{4,9}/\S+)\s+(?!(?:URL\b|https?://|doi\b))([A-Za-z0-9])",
-        r"\1\2",
-        text,
-        flags=re.I,
-    )
-    text = re.sub(
         r"(10\.\d{4,9}/\S*[-./])\s+(?!(?:URL\b|https?://|doi\b))([A-Za-z0-9])",
         r"\1\2",
         text,
@@ -177,11 +171,21 @@ def cluster_columns(blocks, page_width):
 
 def ordered_blocks(page):
     blocks = []
-    for block in page.get_text("blocks"):
-        text = normalize_text(block[4])
-        if not text:
+    for raw_block in page.get_text("dict").get("blocks", []):
+        retained_lines = []
+        for line in raw_block.get("lines", []):
+            line_text = normalize_text("".join(span.get("text", "") for span in line.get("spans", [])))
+            if not line_text or re.fullmatch(r"\d{1,4}", line_text):
+                continue
+            retained_lines.append((*line["bbox"], line_text))
+
+        if not retained_lines:
             continue
-        x0, y0, x1, y1 = block[:4]
+        x0 = min(line[0] for line in retained_lines)
+        y0 = min(line[1] for line in retained_lines)
+        x1 = max(line[2] for line in retained_lines)
+        y1 = max(line[3] for line in retained_lines)
+        text = normalize_text(" ".join(line[4] for line in retained_lines))
         blocks.append((x0, y0, x1, y1, text))
 
     if not blocks:

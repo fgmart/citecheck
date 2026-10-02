@@ -35,6 +35,10 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.12 2026-10-02
+- prevent manuscript line numbers after page-ending references from being appended to DOI suffixes
+- exclude standalone numeric PDF blocks before grouping references while preserving unambiguous wrapped-DOI repairs
+
 ## 3.11 2026-10-02
 - link DOI identifiers embedded in extracted citation text to their `doi.org` targets
 

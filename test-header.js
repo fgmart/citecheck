@@ -145,6 +145,9 @@ const pythonSingleColumnBibliographyRegression = spawnSync(
     'assert "fixture.2026.7. URL https://doi.org/10.1000/fixture.2026.7" in duplicate_doi, duplicate_doi',
     'assert "URLhttps" not in duplicate_doi, duplicate_doi',
     'assert repair_line_wrapping("doi: 10.1000/fixture. 2026") == "doi: 10.1000/fixture.2026"',
+    'complete_doi = "doi:10.1000/fixture2026 1200 1201"',
+    'assert repair_line_wrapping(complete_doi) == complete_doi',
+    'assert repair_line_wrapping(repair_line_wrapping(complete_doi)) == complete_doi',
   ].join('\n')],
   { cwd: __dirname, encoding: 'utf8' }
 );
@@ -220,6 +223,40 @@ const pythonTrailingYearAppendixRegression = spawnSync(
   { cwd: __dirname, encoding: 'utf8' }
 );
 assert.strictEqual(pythonTrailingYearAppendixRegression.status, 0, pythonTrailingYearAppendixRegression.stderr);
+
+const pythonLineNumberDoiRegression = spawnSync(
+  path.join(__dirname, '.venv', 'bin', 'python'),
+  ['-c', [
+    'import fitz',
+    'from scripts.extract_pdf_text import extract_document_text, ordered_blocks',
+    'doc = fitz.open()',
+    'page = doc.new_page(width=612, height=792)',
+    'page.insert_text((258, 70), "References", fontsize=14)',
+    'citations = [',
+    '  "[1] Avery Fixture. 2026. A completed numeric DOI. Fixture Journal. doi:10.1000/3469886",',
+    '  "[2] Blair Sample. 2026. A parenthesized DOI suffix. Fixture Journal. doi:10.1000/IRG-2026-18(3)02",',
+    '  "[3] Casey Harness. 2026. A dotted DOI suffix. Fixture Journal. doi:10.1000/2998181.2998352",',
+    '  "[4] Drew Runner. 2026. Another completed numeric DOI. Fixture Journal. doi:10.1000/3575797",',
+    ']',
+    'for index, citation in enumerate(citations):',
+    '    y = 120 + index * 110',
+    '    page.insert_text((72, y), citation, fontsize=8)',
+    '    for offset in range(4):',
+    '        page.insert_text((42, y + offset * 12), str(1200 + index * 10 + offset), fontsize=6)',
+    'texts = [block[4] for block in ordered_blocks(page)]',
+    'assert not any(text.isdigit() for text in texts), texts',
+    'pdf_path = "/tmp/citecheck-line-number-doi-regression.pdf"',
+    'doc.save(pdf_path)',
+    'groups = extract_document_text(pdf_path).split("\\n\\n")',
+    'assert len(groups) == 4, groups',
+    'expected = ["10.1000/3469886", "10.1000/IRG-2026-18(3)02", "10.1000/2998181.2998352", "10.1000/3575797"]',
+    'for group, doi in zip(groups, expected):',
+    '    assert group.endswith(doi), group',
+    '    assert not any(str(number) in group for number in range(1200, 1234)), group',
+  ].join('\n')],
+  { cwd: __dirname, encoding: 'utf8' }
+);
+assert.strictEqual(pythonLineNumberDoiRegression.status, 0, pythonLineNumberDoiRegression.stderr);
 
 const trailingYearPdfCleaned = cleanExtractedText(pythonTrailingYearAppendixRegression.stdout);
 const trailingYearPdfWithoutHeaders = stripPageHeaders(trailingYearPdfCleaned);
