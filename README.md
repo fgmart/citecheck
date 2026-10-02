@@ -35,6 +35,13 @@ Citecheck uses Crossref for DOI and bibliographic matching. Explicit arXiv ident
 
 # Version History
 
+## 3.13 2026-10-02
+- stop numbered bibliographies at emphasized, left-aligned lettered appendix headings
+- exclude proceedings running headers and submission footers so appendix text and bracketed in-text citations cannot extend the final reference
+- rejoin numeric DOI suffixes split onto their own PDF line without restoring manuscript line numbers
+- use explicit author-year delimiters ahead of periods in abbreviated names when separating long author lists from titles
+- preserve title abbreviations such as `vs.` when locating the publication boundary
+
 ## 3.12 2026-10-02
 - prevent manuscript line numbers after page-ending references from being appended to DOI suffixes
 - exclude standalone numeric PDF blocks before grouping references while preserving unambiguous wrapped-DOI repairs

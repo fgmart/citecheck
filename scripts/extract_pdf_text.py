@@ -16,9 +16,12 @@ SECTION_STOP_RE = re.compile(
     r"(abstract|introduction|conclusion|appendix|acknowledgments|data availability|funding)\b",
     re.I,
 )
+LETTERED_SECTION_HEADING_RE = re.compile(r"^[A-Z]\s+[A-Z][A-Za-z0-9]")
+PAGE_BOILERPLATE_RE = re.compile(r"^(?:Manuscript submitted to ACM|Anon\.)$", re.I)
 SECTION_BOUNDARY_MARKER = "\x00CITECHECK_SECTION_BOUNDARY\x00"
 INLINE_REFERENCE_START_RE = re.compile(r"(?<!\S)(?:\[\d{1,3}\]|[1-9]\d{0,2}[.)])(?=\s+[\w\"'“])")
 YEAR_RE = re.compile(r"\b(?:19|20)\d{2}[a-z]?\b", re.I)
+DOI_AT_TEXT_END_RE = re.compile(r"(?:doi:\s*|https?://doi\.org/)?10\.\d{4,9}/\S+$", re.I)
 AUTHOR_DATE_START_RE = re.compile(
     r"^.{2,320}?\((?:19|20)\d{2}(?:[a-z]|,\s*[^)]*)?\)\.\s+",
     re.I,
@@ -117,10 +120,12 @@ def is_structural_section_heading(page, block):
 
     block_center = (x0 + x1) / 2
     page_center = page.rect.width / 2
-    if (
-        abs(block_center - page_center) > page.rect.width * 0.12
-        or (x1 - x0) > page.rect.width * 0.5
-    ):
+    is_centered = (
+        abs(block_center - page_center) <= page.rect.width * 0.12
+        and (x1 - x0) <= page.rect.width * 0.5
+    )
+    is_lettered_heading = bool(LETTERED_SECTION_HEADING_RE.match(text))
+    if not is_centered and not is_lettered_heading:
         return False
 
     all_sizes = []
@@ -171,15 +176,51 @@ def cluster_columns(blocks, page_width):
 
 def ordered_blocks(page):
     blocks = []
+    numeric_continuation_candidates = []
     for raw_block in page.get_text("dict").get("blocks", []):
         retained_lines = []
+        has_top_page_number = False
         for line in raw_block.get("lines", []):
             line_text = normalize_text("".join(span.get("text", "") for span in line.get("spans", [])))
-            if not line_text or re.fullmatch(r"\d{1,4}", line_text):
+            if not line_text:
+                continue
+            if re.fullmatch(r"\d{1,4}", line_text):
+                if (
+                    line["bbox"][1] < page.rect.height * 0.15
+                    and line["bbox"][0] > page.rect.width * 0.75
+                ):
+                    has_top_page_number = True
+                elif (
+                    retained_lines
+                    and line["bbox"][0] >= page.rect.width * 0.1
+                    and line["bbox"][1] - retained_lines[-1][3] <= page.rect.height * 0.02
+                    and DOI_AT_TEXT_END_RE.search(retained_lines[-1][4])
+                ):
+                    previous = retained_lines[-1]
+                    retained_lines[-1] = (
+                        previous[0], previous[1], max(previous[2], line["bbox"][2]),
+                        line["bbox"][3], f"{previous[4]}{line_text}",
+                    )
+                elif (
+                    line["bbox"][0] >= page.rect.width * 0.1
+                    and page.rect.height * 0.15 <= line["bbox"][1] <= page.rect.height * 0.9
+                ):
+                    numeric_continuation_candidates.append((*line["bbox"], line_text))
+                continue
+            if (
+                PAGE_BOILERPLATE_RE.fullmatch(line_text)
+                and (
+                    line["bbox"][1] < page.rect.height * 0.15
+                    or line["bbox"][1] > page.rect.height * 0.8
+                )
+            ):
                 continue
             retained_lines.append((*line["bbox"], line_text))
 
-        if not retained_lines:
+        # Some proceedings templates place the running title and page number in
+        # one PDF block. Once the numeric line is removed, the title would
+        # otherwise look like bibliography continuation text.
+        if not retained_lines or has_top_page_number:
             continue
         x0 = min(line[0] for line in retained_lines)
         y0 = min(line[1] for line in retained_lines)
@@ -187,6 +228,24 @@ def ordered_blocks(page):
         y1 = max(line[3] for line in retained_lines)
         text = normalize_text(" ".join(line[4] for line in retained_lines))
         blocks.append((x0, y0, x1, y1, text))
+
+    # A wrapped DOI suffix may be emitted as its own numeric PDF block. Join it
+    # only when it is spatially adjacent to a block that ends in a DOI; ordinary
+    # manuscript line numbers live in the margin and never satisfy this test.
+    for numeric_block in numeric_continuation_candidates:
+        nearby = [
+            (index, block) for index, block in enumerate(blocks)
+            if DOI_AT_TEXT_END_RE.search(block[4])
+            and 0 <= numeric_block[1] - block[3] <= page.rect.height * 0.02
+            and block[0] - 2 <= numeric_block[0] <= block[0] + page.rect.width * 0.2
+        ]
+        if not nearby:
+            continue
+        index, previous = min(nearby, key=lambda item: numeric_block[1] - item[1][3])
+        blocks[index] = (
+            previous[0], previous[1], max(previous[2], numeric_block[2]),
+            numeric_block[3], f"{previous[4]}{numeric_block[4]}",
+        )
 
     if not blocks:
         return []

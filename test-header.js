@@ -224,6 +224,69 @@ const pythonTrailingYearAppendixRegression = spawnSync(
 );
 assert.strictEqual(pythonTrailingYearAppendixRegression.status, 0, pythonTrailingYearAppendixRegression.stderr);
 
+const pythonLetteredAppendixRegression = spawnSync(
+  path.join(__dirname, '.venv', 'bin', 'python'),
+  ['-c', [
+    'import fitz',
+    'from scripts.extract_pdf_text import extract_document_text, is_structural_section_heading, ordered_blocks',
+    'doc = fitz.open()',
+    'refs = doc.new_page(width=612, height=792)',
+    'refs.insert_text((258, 70), "References", fontsize=14)',
+    'refs.insert_text((72, 115), "[1] Avery Fixture. 2024. A synthetic citation. Fixture Review 1, 1-9.", fontsize=8)',
+    'refs.insert_text((72, 145), "[2] Blair Sample. 2025. Another synthetic citation. Fixture Review 2, 10-19.", fontsize=8)',
+    'refs.insert_text((72, 175), "[3] Casey Harness. 2026. The final synthetic citation. Fixture Review 3, 20-29.", fontsize=8)',
+    'refs.insert_text((72, 665), "Manuscript submitted to ACM", fontsize=8)',
+    'appendix = doc.new_page(width=612, height=792)',
+    'appendix.insert_text((72, 68), "Synthetic Running Article Title", fontsize=9)',
+    'appendix.insert_text((520, 68), "2", fontsize=9)',
+    'appendix.insert_text((72, 100), "A Scoping Review Documentation", fontsize=10, fontname="hebo")',
+    'appendix.insert_text((72, 135), "[11] consists of ten synthetic survey items and is not a reference.", fontsize=8)',
+    'appendix.insert_text((72, 160), "[36] yields another bracketed appendix citation that must be ignored.", fontsize=8)',
+    'appendix_blocks = ordered_blocks(appendix)',
+    'assert any(is_structural_section_heading(appendix, block) for block in appendix_blocks), appendix_blocks',
+    'pdf_path = "/tmp/citecheck-lettered-appendix-regression.pdf"',
+    'doc.save(pdf_path)',
+    'groups = extract_document_text(pdf_path).split("\\n\\n")',
+    'assert len(groups) == 3, groups',
+    'assert groups[-1].startswith("[3] Casey Harness"), groups',
+    'assert groups[-1].endswith("20-29."), groups[-1]',
+    'assert not any("appendix citation" in group.lower() for group in groups), groups',
+    'assert not any(group.startswith("[11]") or group.startswith("[36]") for group in groups), groups',
+  ].join('\n')],
+  { cwd: __dirname, encoding: 'utf8' }
+);
+assert.strictEqual(pythonLetteredAppendixRegression.status, 0, pythonLetteredAppendixRegression.stderr);
+
+const pythonWrappedNumericDoiRegression = spawnSync(
+  path.join(__dirname, '.venv', 'bin', 'python'),
+  ['-c', [
+    'import fitz',
+    'from scripts.extract_pdf_text import extract_document_text',
+    'doc = fitz.open()',
+    'page = doc.new_page(width=612, height=792)',
+    'page.insert_text((258, 70), "References", fontsize=14)',
+    'page.insert_textbox(fitz.Rect(72, 110, 550, 155), "[1] Avery Fixture. 2024. A synthetic citation. Fixture Review. doi:10.1000/FIXTURE_\\n2", fontsize=8)',
+    'page.insert_textbox(fitz.Rect(72, 175, 550, 220), "[2] Blair Sample. 2025. Another synthetic citation. Fixture Review. doi:10.1000/fixtureABC\\n73", fontsize=8)',
+    'page.insert_text((72, 240), "[3] Casey Harness. 2026. A final synthetic citation. Fixture Review.", fontsize=8)',
+    'page.insert_text((115, 300), "[4] Drew Runner. 2026. A right-column synthetic citation. Fixture Review. doi:10.1000/complete-0", fontsize=8)',
+    'page.insert_text((84, 311), "1500", fontsize=6)',
+    'page.insert_text((84, 322), "1501", fontsize=6)',
+    'for offset in range(4):',
+    '    page.insert_text((42, 110 + offset * 12), str(1400 + offset), fontsize=6)',
+    'pdf_path = "/tmp/citecheck-wrapped-numeric-doi-regression.pdf"',
+    'doc.save(pdf_path)',
+    'groups = extract_document_text(pdf_path).split("\\n\\n")',
+    'assert len(groups) == 4, groups',
+    'assert "10.1000/FIXTURE_2" in groups[0], groups[0]',
+    'assert "10.1000/fixtureABC73" in groups[1], groups[1]',
+    'assert groups[3].endswith("10.1000/complete-0"), groups[3]',
+    'assert not any(str(number) in " ".join(groups) for number in range(1400, 1404)), groups',
+    'assert "1500" not in " ".join(groups) and "1501" not in " ".join(groups), groups',
+  ].join('\n')],
+  { cwd: __dirname, encoding: 'utf8' }
+);
+assert.strictEqual(pythonWrappedNumericDoiRegression.status, 0, pythonWrappedNumericDoiRegression.stderr);
+
 const pythonLineNumberDoiRegression = spawnSync(
   path.join(__dirname, '.venv', 'bin', 'python'),
   ['-c', [
@@ -410,6 +473,22 @@ assert.strictEqual(extractedMetadata.authors, 'Morgan Tester and Riley Example')
 assert.strictEqual(extractedMetadata.date, '2025');
 assert.strictEqual(extractedMetadata.title, 'Calibrating Widget Classifiers in the Age of Synthetic Data');
 assert.ok(extractedMetadata.venue.includes('ACM Trans'));
+
+const abbreviatedLongAuthorMetadata = extractReferenceMetadata('[29] Avery Fixture, Blair Kh. Sample, Casey Harness, Drew Runner, Emery Example, Finley Mock, Gray Parser, Hayden Record, Indigo Test, Jules Metric, Kai Datum, Lane Check, Morgan Scenario, Nova Boundary, Oakley Token, Parker Example, Quinn Sample, and Rowan Fixture. 2025. Evaluating Long Synthetic Author Lists in Parser Fixtures: A Controlled Trial. Journal of Fixture Surgery 160, 9 (2025), 993–1003. doi:10.1000/fixture.2025.2564');
+assert.strictEqual(abbreviatedLongAuthorMetadata.authors, 'Avery Fixture, Blair Kh. Sample, Casey Harness, Drew Runner, Emery Example, Finley Mock, Gray Parser, Hayden Record, Indigo Test, Jules Metric, Kai Datum, Lane Check, Morgan Scenario, Nova Boundary, Oakley Token, Parker Example, Quinn Sample, and Rowan Fixture');
+assert.ok(abbreviatedLongAuthorMetadata.authors.length > 240);
+assert.strictEqual(abbreviatedLongAuthorMetadata.date, '2025');
+assert.strictEqual(abbreviatedLongAuthorMetadata.title, 'Evaluating Long Synthetic Author Lists in Parser Fixtures: A Controlled Trial');
+assert.strictEqual(abbreviatedLongAuthorMetadata.venue, 'Journal of Fixture Surgery');
+assert.strictEqual(abbreviatedLongAuthorMetadata.volume, '160');
+assert.strictEqual(abbreviatedLongAuthorMetadata.issue, '9');
+assert.strictEqual(abbreviatedLongAuthorMetadata.pages, '993–1003');
+
+const abbreviatedTitleMetadata = extractReferenceMetadata('[60] A. Fixture, B. Sample, and C. Harness. 2026. Parser-Box vs. Checker-Box: Designing Deliberate Evaluation for Synthetic Records. In Proceedings of the 2026 Conference on Fixture Parsing. 1–20.');
+assert.strictEqual(abbreviatedTitleMetadata.authors, 'A. Fixture, B. Sample, and C. Harness');
+assert.strictEqual(abbreviatedTitleMetadata.title, 'Parser-Box vs. Checker-Box: Designing Deliberate Evaluation for Synthetic Records');
+assert.strictEqual(abbreviatedTitleMetadata.venue, 'Proceedings of the 2026 Conference on Fixture Parsing');
+assert.strictEqual(abbreviatedTitleMetadata.pages, '1–20');
 
 const twoWordTitleMetadata = extractReferenceMetadata('[20] Jordan Fixture. 2006. Algorithmic Reasoning. Commun. Fixtures 49, 3 (2006), 33–35. doi:10.1000/fixture.2006.20');
 assert.strictEqual(twoWordTitleMetadata.title, 'Algorithmic Reasoning');

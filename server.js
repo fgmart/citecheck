@@ -6,7 +6,7 @@ const { XMLParser } = require('fast-xml-parser');
 
 const PORT = process.env.PORT || 3000;
 const uploadsDir = path.join(__dirname, 'uploads');
-const ENGINE_VERSION = 'citecheck-v3.12';
+const ENGINE_VERSION = 'citecheck-v3.13';
 const DEBUG_PARSER = process.env.DEBUG_PARSER === 'true';
 const CROSSREF_MAILTO = process.env.CROSSREF_MAILTO || '';
 const CROSSREF_CONCURRENCY = Number(process.env.CROSSREF_CONCURRENCY || 1);
@@ -344,6 +344,13 @@ function extractTitleCandidate(reference) {
   const titleSource = year && withoutUrl.includes(String(year))
     ? withoutUrl.slice(withoutUrl.indexOf(String(year)) + String(year).length)
     : withoutUrl;
+  const normalizedTitleSource = titleSource.replace(/^[.\s]+/, '').trim();
+  const leadingYearBoundary = findNonInitialSentenceBoundary(normalizedTitleSource, true);
+  if (/\.\s+(?:19|20)\d{2}[a-z]?\.\s+\S/i.test(withoutUrl) && leadingYearBoundary) {
+    return normalizedTitleSource
+      .slice(0, leadingYearBoundary.index + (leadingYearBoundary.punctuation === '?' ? 1 : 0))
+      .trim();
+  }
   const segments = titleSource
     .split(/\.\s*/)
     .map((segment) => segment.trim())
@@ -354,7 +361,7 @@ function extractTitleCandidate(reference) {
     return words.length >= 2 && !/[;]/.test(segment) && !hasVenueIndicator;
   });
 
-  return titleCandidate || titleSource.replace(/^[.\s]+/, '').slice(0, 160);
+  return titleCandidate || normalizedTitleSource.slice(0, 160);
 }
 
 function shouldSearchArxiv(reference) {
@@ -473,6 +480,11 @@ function parseApaLikeReference(reference) {
 function parseTrailingYearReference(reference) {
   if (findQuotedTitle(reference)) return null;
   const cleaned = cleanReferenceForMetadata(reference);
+  // A period-delimited year immediately after the authors is a stronger
+  // boundary than periods inside abbreviated names (for example, "Kh.").
+  // Leave these leading-year records to the standard metadata parser instead
+  // of misclassifying them as citations whose publication year trails.
+  if (/\.\s+(?:19|20)\d{2}[a-z]?\.\s+\S/i.test(cleaned)) return null;
   const authorBoundary = findNonInitialSentenceBoundary(cleaned, false, true);
   if (!authorBoundary) return null;
 
@@ -551,7 +563,7 @@ function extractAuthorsCandidate(reference) {
   if (!/(?:^|[\s,])[A-Z]\.$/.test(authors)) {
     authors = authors.replace(/\.+$/g, '');
   }
-  return authors.slice(0, 240);
+  return year ? authors : authors.slice(0, 240);
 }
 
 function extractVenueCandidate(reference) {
